@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { 
   FileText, 
   CheckCircle2, 
@@ -15,7 +15,8 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CFDIData, CFDIConcept, CFDIProfile, CFDIIngresoRow, CFDIPagoRow } from './cfdi/public';
-import { analyzeCFDIWithWorker } from './lib/cfdi-worker-client';
+import { useCfdiAnalysis } from './app/hooks/useCfdiAnalysis';
+import { useExtractGridState, type ExtractMode, type ExtractSortDirection } from './app/hooks/useExtractGridState';
 import { explainCfdiField } from './cfdi/domain/explainCfdiField';
 import CfdiSummaryHeader, { type SummaryFieldCard } from './components/CfdiSummaryHeader';
 import ConceptDetailModal from './components/ConceptDetailModal';
@@ -32,9 +33,6 @@ function formatExact(value: number) {
     maximumFractionDigits: 20,
   });
 }
-
-type ExtractMode = 'ingresos' | 'pagos';
-type ExtractSortDirection = 'asc' | 'desc';
 
 interface SummaryMetricCard {
   key: string;
@@ -74,10 +72,6 @@ const DIAGNOSE_COLUMNS = [
   { key: 'diferencia', label: 'Dif.' },
   { key: 'status', label: 'Status' },
 ] as const;
-
-function getExtractCellValue(row: Record<string, string>, key: string) {
-  return row[key] ?? '';
-}
 
 function getDiagnoseCellValue(concept: CFDIConcept, key: string) {
   switch (key) {
@@ -143,19 +137,22 @@ function getFindingOriginLabel(findingId: string) {
 }
 
 export default function App() {
-  const [profile, setProfile] = useState<CFDIProfile>('unknown');
-  const [cfdi, setCfdi] = useState<CFDIData | null>(null);
-  const [ingresoRows, setIngresoRows] = useState<CFDIIngresoRow[]>([]);
-  const [pagoRows, setPagoRows] = useState<CFDIPagoRow[]>([]);
-  const [analysisEngine, setAnalysisEngine] = useState<'idle' | 'worker' | 'fallback'>('idle');
-  const [analysisReason, setAnalysisReason] = useState('');
-  const [analysisStageLabel, setAnalysisStageLabel] = useState('Analizando estructura CFDI');
-  const [analysisStageProgress, setAnalysisStageProgress] = useState(100);
-  const [analysisStageDetail, setAnalysisStageDetail] = useState('');
+  const {
+    profile,
+    cfdi,
+    ingresoRows,
+    pagoRows,
+    analysisEngine,
+    analysisReason,
+    analysisStageLabel,
+    analysisStageProgress,
+    analysisStageDetail,
+    sourceXml,
+    handleFileSelect,
+    resetAnalysis,
+  } = useCfdiAnalysis();
   const [diagnoseSearchTerm, setDiagnoseSearchTerm] = useState('');
   const [diagnoseColumnFilterKey, setDiagnoseColumnFilterKey] = useState<string>('all');
-  const [extractSearchTerm, setExtractSearchTerm] = useState('');
-  const [extractColumnFilterKey, setExtractColumnFilterKey] = useState<string>('all');
   const [onlyImpacted, setOnlyImpacted] = useState(true);
   const [selectedConcept, setSelectedConcept] = useState<CFDIConcept | null>(null);
   const [reportExported, setReportExported] = useState(false);
@@ -165,59 +162,12 @@ export default function App() {
   const [pagosExportError, setPagosExportError] = useState(false);
   const [tableExported, setTableExported] = useState(false);
   const [tableExportError, setTableExportError] = useState(false);
-  const [sourceXml, setSourceXml] = useState('');
-  const [extractPage, setExtractPage] = useState(1);
-  const [extractPageSize, setExtractPageSize] = useState(100);
-  const [extractSortKey, setExtractSortKey] = useState<string>('descripcion');
-  const [extractSortDirection, setExtractSortDirection] = useState<ExtractSortDirection>('asc');
-  const [hiddenIngresoColumns, setHiddenIngresoColumns] = useState<string[]>([]);
-  const [hiddenPagoColumns, setHiddenPagoColumns] = useState<string[]>([]);
   const [hiddenDiagnoseColumns, setHiddenDiagnoseColumns] = useState<string[]>([]);
   const [diagnosePage, setDiagnosePage] = useState(1);
   const [diagnosePageSize, setDiagnosePageSize] = useState(100);
   const [diagnoseSortKey, setDiagnoseSortKey] = useState<string>('diferencia');
   const [diagnoseSortDirection, setDiagnoseSortDirection] = useState<ExtractSortDirection>('desc');
   const [taxAuditExpanded, setTaxAuditExpanded] = useState(true);
-
-  const handleFileSelect = async (xml: string) => {
-    try {
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const { bundle, engine, reason } = await analyzeCFDIWithWorker(xml, ({ label, progress, detail }) => {
-        setAnalysisStageLabel(label);
-        setAnalysisStageProgress(progress);
-        setAnalysisStageDetail(detail ?? '');
-      });
-      setSourceXml(xml);
-      setCfdi(bundle.cfdi);
-      setIngresoRows(bundle.ingresoRows);
-      setPagoRows(bundle.pagoRows);
-      setProfile(bundle.profile);
-      setAnalysisEngine(engine);
-      setAnalysisReason(reason ?? '');
-      setAnalysisStageLabel('Analizando estructura CFDI');
-      setAnalysisStageProgress(100);
-      setAnalysisStageDetail('');
-      setExtractSearchTerm('');
-      setExtractColumnFilterKey('all');
-      setDiagnoseSearchTerm('');
-      setDiagnoseColumnFilterKey('all');
-      setExtractPage(1);
-      setExtractPageSize(100);
-      setExtractSortKey(bundle.profile === 'pagos' ? 'fechaPago' : 'descripcion');
-      setExtractSortDirection('asc');
-      setDiagnosePage(1);
-      setDiagnosePageSize(100);
-      setDiagnoseSortKey('diferencia');
-      setDiagnoseSortDirection('desc');
-      setTaxAuditExpanded(true);
-      setHiddenIngresoColumns([]);
-      setHiddenPagoColumns([]);
-      setHiddenDiagnoseColumns([]);
-    } catch (error) {
-      console.error("Error parsing CFDI:", error);
-      alert("Error al procesar el XML. Asegúrate de que sea un CFDI válido.");
-    }
-  };
 
   const exportReport = () => {
     if (!cfdi) return;
@@ -498,21 +448,41 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     : [];
 
   const activeDatasetType: ExtractMode = profile === 'pagos' ? 'pagos' : 'ingresos';
-  const activeExtractBaseRows = activeDatasetType === 'ingresos' ? ingresoRows : pagoRows;
   const extractColumns = activeDatasetType === 'ingresos' ? INGRESO_COLUMNS : PAGO_COLUMNS;
-  const activeHiddenColumns = activeDatasetType === 'ingresos' ? hiddenIngresoColumns : hiddenPagoColumns;
-  const visibleExtractColumns = extractColumns.filter((column) => !activeHiddenColumns.includes(column.key));
-  const visibleDiagnoseColumns = DIAGNOSE_COLUMNS.filter((column) => !hiddenDiagnoseColumns.includes(column.key));
-  const filteredExtractRows = activeExtractBaseRows.filter((row) => {
-    const search = extractSearchTerm.trim().toLowerCase();
-    if (!search) return true;
-
-    if (extractColumnFilterKey === 'all') {
-      return Object.values(row).some((value) => String(value).toLowerCase().includes(search));
-    }
-
-    return getExtractCellValue(row as Record<string, string>, extractColumnFilterKey).toLowerCase().includes(search);
+  const {
+    extractSearchTerm,
+    setExtractSearchTerm,
+    extractColumnFilterKey,
+    setExtractColumnFilterKey,
+    extractPage,
+    setExtractPage,
+    extractPageSize,
+    setExtractPageSize,
+    extractSortKey,
+    setExtractSortKey,
+    extractSortDirection,
+    setExtractSortDirection,
+    activeHiddenColumns,
+    visibleExtractColumns,
+    filteredExtractRows,
+    sortedExtractRows,
+    filteredExtractCount,
+    extractTotalPages,
+    safeExtractPage,
+    extractPageStart,
+    currentPageRows,
+    getExtractCellValue,
+    resetForNewAnalysis,
+    resetGrid,
+    toggleColumn,
+    resetAll: resetExtractState,
+  } = useExtractGridState({
+    activeDatasetType,
+    ingresoRows,
+    pagoRows,
+    extractColumns,
   });
+  const visibleDiagnoseColumns = DIAGNOSE_COLUMNS.filter((column) => !hiddenDiagnoseColumns.includes(column.key));
   const filteredIngresoRows = activeDatasetType === 'ingresos' ? filteredExtractRows as CFDIIngresoRow[] : ingresoRows;
   const filteredPagoRows = activeDatasetType === 'pagos' ? filteredExtractRows as CFDIPagoRow[] : pagoRows;
   const conceptosDetectados = new Set(
@@ -579,31 +549,6 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     return rows;
   }, [filteredConceptos, diagnoseSortDirection, diagnoseSortKey]);
 
-  const sortedExtractRows = useMemo(() => {
-    const rows = [...filteredExtractRows];
-    rows.sort((left, right) => {
-      const leftValue = getExtractCellValue(left as Record<string, string>, extractSortKey).toLowerCase();
-      const rightValue = getExtractCellValue(right as Record<string, string>, extractSortKey).toLowerCase();
-
-      const leftNumber = Number(leftValue);
-      const rightNumber = Number(rightValue);
-      const bothNumeric = !Number.isNaN(leftNumber) && !Number.isNaN(rightNumber) && leftValue !== '' && rightValue !== '';
-
-      if (bothNumeric) {
-        return extractSortDirection === 'asc' ? leftNumber - rightNumber : rightNumber - leftNumber;
-      }
-
-      const comparison = leftValue.localeCompare(rightValue, 'es', { numeric: true, sensitivity: 'base' });
-      return extractSortDirection === 'asc' ? comparison : -comparison;
-    });
-    return rows;
-  }, [filteredExtractRows, extractSortDirection, extractSortKey]);
-
-  const filteredExtractCount = sortedExtractRows.length;
-  const extractTotalPages = Math.max(1, Math.ceil(filteredExtractCount / extractPageSize));
-  const safeExtractPage = Math.min(extractPage, extractTotalPages);
-  const extractPageStart = filteredExtractCount === 0 ? 0 : (safeExtractPage - 1) * extractPageSize;
-  const currentPageRows = sortedExtractRows.slice(extractPageStart, extractPageStart + extractPageSize);
   const filteredDiagnoseCount = sortedDiagnoseRows.length;
   const diagnoseTotalPages = Math.max(1, Math.ceil(filteredDiagnoseCount / diagnosePageSize));
   const safeDiagnosePage = Math.min(diagnosePage, diagnoseTotalPages);
@@ -670,18 +615,6 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
   const summaryFields = summaryFieldBuilders[profile]?.() ?? [];
   const activeExtractMetrics = extractMetricBuilders[activeDatasetType]();
 
-  useEffect(() => {
-    if (extractPage > extractTotalPages) {
-      setExtractPage(extractTotalPages);
-    }
-  }, [extractPage, extractTotalPages]);
-
-  useEffect(() => {
-    if (diagnosePage > diagnoseTotalPages) {
-      setDiagnosePage(diagnoseTotalPages);
-    }
-  }, [diagnosePage, diagnoseTotalPages]);
-
   if (!cfdi) {
     return (
       <div className="min-h-screen bg-[#E4E3E0] flex items-center justify-center p-6">
@@ -691,7 +624,21 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
             <p className="text-[#141414]/60 font-mono text-sm uppercase tracking-widest">Auditoría y Validación de Facturas XML</p>
           </div>
           <FileUpload
-            onFileSelect={handleFileSelect}
+            onFileSelect={(xml) =>
+              handleFileSelect(xml, {
+                onBeforeApply: (nextProfile) => {
+                  resetForNewAnalysis(nextProfile === 'pagos' ? 'pagos' : 'ingresos');
+                  setDiagnoseSearchTerm('');
+                  setDiagnoseColumnFilterKey('all');
+                  setDiagnosePage(1);
+                  setDiagnosePageSize(100);
+                  setDiagnoseSortKey('diferencia');
+                  setDiagnoseSortDirection('desc');
+                  setTaxAuditExpanded(true);
+                  setHiddenDiagnoseColumns([]);
+                },
+              })
+            }
             analysisLabel={analysisStageLabel}
             analysisProgress={analysisStageProgress}
             analysisDetail={analysisStageDetail}
@@ -711,26 +658,10 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
         tableExportError={tableExportError}
         onExport={exportCurrentTable}
         onReset={() => {
-          setCfdi(null);
-          setIngresoRows([]);
-          setPagoRows([]);
-          setSourceXml('');
-          setProfile('unknown');
-          setAnalysisEngine('idle');
-          setAnalysisReason('');
-          setAnalysisStageLabel('Analizando estructura CFDI');
-          setAnalysisStageProgress(100);
-          setAnalysisStageDetail('');
-          setExtractSearchTerm('');
-          setExtractColumnFilterKey('all');
+          resetAnalysis();
+          resetExtractState();
           setDiagnoseSearchTerm('');
           setDiagnoseColumnFilterKey('all');
-          setExtractPage(1);
-          setExtractPageSize(100);
-          setExtractSortKey('descripcion');
-          setExtractSortDirection('asc');
-          setHiddenIngresoColumns([]);
-          setHiddenPagoColumns([]);
           setDiagnosePage(1);
           setDiagnosePageSize(100);
           setDiagnoseSortKey('diferencia');
@@ -799,30 +730,8 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                 setExtractPageSize(value);
                 setExtractPage(1);
               }}
-              onResetGrid={() => {
-                setExtractSearchTerm('');
-                setExtractColumnFilterKey('all');
-                setExtractPage(1);
-                setExtractPageSize(100);
-                setExtractSortKey(activeDatasetType === 'pagos' ? 'fechaPago' : 'descripcion');
-                setExtractSortDirection('asc');
-                if (activeDatasetType === 'ingresos') {
-                  setHiddenIngresoColumns([]);
-                } else {
-                  setHiddenPagoColumns([]);
-                }
-              }}
-              onToggleColumn={(columnKey, hidden) => {
-                if (activeDatasetType === 'ingresos') {
-                  setHiddenIngresoColumns((current) =>
-                    hidden ? current.filter((key) => key !== columnKey) : [...current, columnKey]
-                  );
-                } else {
-                  setHiddenPagoColumns((current) =>
-                    hidden ? current.filter((key) => key !== columnKey) : [...current, columnKey]
-                  );
-                }
-              }}
+              onResetGrid={resetGrid}
+              onToggleColumn={toggleColumn}
               onPrevPage={() => setExtractPage((current) => Math.max(1, current - 1))}
               onNextPage={() => setExtractPage((current) => Math.min(extractTotalPages, current + 1))}
             />
