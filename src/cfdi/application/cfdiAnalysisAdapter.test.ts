@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CFDIData } from './cfdi';
-import { enrichCfdiWithMathDiagnosis, toCanonicalCfdi } from './cfdi-domain-adapter';
+import type { CFDIData } from '../../lib/cfdi';
+import { enrichCfdiWithMathDiagnosis, toCanonicalCfdi } from './cfdiAnalysisAdapter';
 
 function createBaseCfdiData(overrides: Partial<CFDIData> = {}): CFDIData {
   return {
@@ -63,7 +63,7 @@ function createBaseCfdiData(overrides: Partial<CFDIData> = {}): CFDIData {
   };
 }
 
-describe('cfdi-domain-adapter', () => {
+describe('cfdiAnalysisAdapter', () => {
   it('maps CFDIData into CanonicalCfdi shape', () => {
     const data = createBaseCfdiData();
 

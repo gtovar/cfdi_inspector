@@ -1,6 +1,6 @@
-import type { CanonicalCfdi, CanonicalConcept, CanonicalTaxLine } from '../cfdi/domain/canonicalCfdi';
-import { diagnoseCfdiMath, roundCurrency, sumSafe, type MathFinding } from '../cfdi/domain/diagnoseCfdiMath';
-import type { AuditFinding, CFDIData, CFDIImpuesto } from './cfdi';
+import type { CanonicalCfdi, CanonicalConcept, CanonicalTaxLine } from '../domain/canonicalCfdi';
+import { diagnoseCfdiMath, roundCurrency, sumSafe, type MathFinding } from '../domain/diagnoseCfdiMath';
+import type { AuditFinding, CFDIConcept, CFDIData, CFDIImpuesto } from '../../lib/cfdi';
 
 function toCanonicalTaxLine(impuesto: CFDIImpuesto): CanonicalTaxLine {
   return {
@@ -24,6 +24,19 @@ function toCanonicalConcept(concepto: CFDIData['conceptos'][number]): CanonicalC
   };
 }
 
+function fromCanonicalTaxLine(impuesto: CanonicalTaxLine, tipo: CFDIImpuesto['tipo']): CFDIImpuesto {
+  return {
+    tipo,
+    impuesto: impuesto.impuesto ?? '',
+    base: impuesto.base ?? 0,
+    tipoFactor: impuesto.tipoFactor ?? '',
+    tasaOCuota: impuesto.tasaOCuota ?? 0,
+    importe: impuesto.importe ?? 0,
+    importeCalculado: 0,
+    diferencia: 0,
+  };
+}
+
 export function toCanonicalCfdi(data: CFDIData): CanonicalCfdi {
   return {
     version: data.version || null,
@@ -38,6 +51,45 @@ export function toCanonicalCfdi(data: CFDIData): CanonicalCfdi {
       retenciones: data.impuestosGlobales.filter((impuesto) => impuesto.tipo === 'Retencion').map(toCanonicalTaxLine),
     },
   };
+}
+
+export function canonicalConceptToCfdiConcept(concepto: CanonicalConcept): CFDIConcept {
+  const impuestos = [
+    ...concepto.traslados.map((impuesto) => fromCanonicalTaxLine(impuesto, 'Traslado')),
+    ...concepto.retenciones.map((impuesto) => fromCanonicalTaxLine(impuesto, 'Retencion')),
+  ];
+
+  const cantidad = concepto.cantidad ?? 0;
+  const valorUnitario = concepto.valorUnitario ?? 0;
+  const importe = concepto.importe ?? 0;
+
+  return {
+    descripcion: concepto.descripcion ?? '',
+    cantidad,
+    valorUnitario,
+    importe,
+    importeCalculado: Number((cantidad * valorUnitario).toFixed(6)),
+    diferencia: Math.abs(importe - cantidad * valorUnitario),
+    claveProdServ: '',
+    impuestos: impuestos.map((impuesto) => ({
+      ...impuesto,
+      importeCalculado:
+        impuesto.tipoFactor === 'Tasa'
+          ? Number(((impuesto.base ?? 0) * (impuesto.tasaOCuota ?? 0)).toFixed(6))
+          : 0,
+      diferencia:
+        impuesto.tipoFactor === 'Tasa'
+          ? Math.abs((impuesto.importe ?? 0) - (impuesto.base ?? 0) * (impuesto.tasaOCuota ?? 0))
+          : 0,
+    })),
+  };
+}
+
+export function canonicalSummaryTaxesToCfdi(summary: CanonicalCfdi['resumenImpuestos']): CFDIImpuesto[] {
+  return [
+    ...summary.traslados.map((impuesto) => fromCanonicalTaxLine(impuesto, 'Traslado')),
+    ...summary.retenciones.map((impuesto) => fromCanonicalTaxLine(impuesto, 'Retencion')),
+  ];
 }
 
 function mapMathSeverity(severity: MathFinding['severity']): AuditFinding['severity'] {
@@ -77,7 +129,7 @@ function buildMathFindingMessage(finding: MathFinding): string {
   return `${buildMathFindingTitle(finding)}: ${buildMathFindingSummary(finding)}`;
 }
 
-export function enrichCfdiWithMathDiagnosis(data: CFDIData): CFDIData {
+export function enrichCfdiWithMathDiagnosis(data: CFDIData, canonical: CanonicalCfdi = toCanonicalCfdi(data)): CFDIData {
   data.subtotalCalculado = roundCurrency(sumSafe(data.conceptos.map((concepto) => concepto.importe)));
   data.totalCalculado = roundCurrency(
     data.subtotalCalculado
@@ -86,7 +138,7 @@ export function enrichCfdiWithMathDiagnosis(data: CFDIData): CFDIData {
       - roundCurrency(sumSafe(data.conceptos.flatMap((concepto) => concepto.impuestos.filter((impuesto) => impuesto.tipo === 'Retencion').map((impuesto) => impuesto.importe)))),
   );
 
-  const diagnosis = diagnoseCfdiMath(toCanonicalCfdi(data));
+  const diagnosis = diagnoseCfdiMath(canonical);
 
   diagnosis.findings.forEach((finding) => {
     data.findings.push({

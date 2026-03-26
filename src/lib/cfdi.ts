@@ -3,7 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { enrichCfdiWithMathDiagnosis } from './cfdi-domain-adapter';
+import {
+  canonicalConceptToCfdiConcept,
+  canonicalSummaryTaxesToCfdi,
+  enrichCfdiWithMathDiagnosis,
+} from '../cfdi/application/cfdiAnalysisAdapter';
+import { normalizeCfdi } from '../cfdi/domain/normalizeCfdi';
 
 export interface CFDIConcept {
   descripcion: string;
@@ -138,6 +143,7 @@ function summarizeDifference(xmlValue: number, calcValue: number) {
 export function parseCFDI(xmlString: string): CFDIData {
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(xmlString, "text/xml");
+  const canonical = normalizeCfdi(xmlString);
   
   const ns = {
     cfdi: "http://www.sat.gob.mx/cfdv4",
@@ -177,79 +183,18 @@ export function parseCFDI(xmlString: string): CFDIData {
     supportText: ''
   };
 
-  // Parse Conceptos
-  const conceptosNodes = xmlDoc.getElementsByTagNameNS("*", "Concepto");
-  for (let i = 0; i < conceptosNodes.length; i++) {
-    const node = conceptosNodes[i];
-    const cantidad = getNum(node, "Cantidad");
-    const valorUnitario = getNum(node, "ValorUnitario");
-    const importe = getNum(node, "Importe");
-    
-    // Recalcular importe (con precisión de 6 decimales para comparación)
-    const importeCalculado = Number((cantidad * valorUnitario).toFixed(6));
-    const diff = Math.abs(importe - (cantidad * valorUnitario));
-
-    const concepto: CFDIConcept = {
-      descripcion: getAttr(node, "Descripcion"),
-      cantidad,
-      valorUnitario,
-      importe,
-      importeCalculado,
-      diferencia: diff,
-      claveProdServ: getAttr(node, "ClaveProdServ"),
-      impuestos: []
-    };
-
-    // Impuestos del concepto
-    const traslados = node.getElementsByTagNameNS("*", "Traslado");
-    for (let j = 0; j < traslados.length; j++) {
-      const t = traslados[j];
-      const base = getNum(t, "Base");
-      const tasa = getNum(t, "TasaOCuota");
-      const imp = getNum(t, "Importe");
-      const impCalc = Number((base * tasa).toFixed(6));
-      
-      concepto.impuestos.push({
-        tipo: 'Traslado',
-        impuesto: getAttr(t, "Impuesto"),
-        base,
-        tipoFactor: getAttr(t, "TipoFactor"),
-        tasaOCuota: tasa,
-        importe: imp,
-        importeCalculado: impCalc,
-        diferencia: Math.abs(imp - (base * tasa))
-      });
-    }
-
-    data.conceptos.push(concepto);
-    data.subtotalCalculado += concepto.importe;
-  }
-
-  // Impuestos Globales
-  const impuestosGlobalesNodes = xmlDoc.getElementsByTagNameNS("*", "Impuestos");
-  // Buscamos el nodo de impuestos que es hijo directo de Comprobante
-  for (let i = 0; i < impuestosGlobalesNodes.length; i++) {
-    if (impuestosGlobalesNodes[i].parentElement === comprobante) {
-      const traslados = impuestosGlobalesNodes[i].getElementsByTagNameNS("*", "Traslado");
-      for (let j = 0; j < traslados.length; j++) {
-        const t = traslados[j];
-        data.impuestosGlobales.push({
-          tipo: 'Traslado',
-          impuesto: getAttr(t, "Impuesto"),
-          base: getNum(t, "Base"),
-          tipoFactor: getAttr(t, "TipoFactor"),
-          tasaOCuota: getNum(t, "TasaOCuota"),
-          importe: getNum(t, "Importe"),
-          importeCalculado: 0, // No aplica directo aquí sin sumar conceptos
-          diferencia: 0
-        });
-      }
-    }
-  }
+  data.conceptos = canonical.conceptos.map(canonicalConceptToCfdiConcept);
+  data.conceptos.forEach((concepto, index) => {
+    const conceptosNodes = xmlDoc.getElementsByTagNameNS("*", "Concepto");
+    const sourceNode = conceptosNodes[index] ?? null;
+    data.conceptos[index].claveProdServ = getAttr(sourceNode, "ClaveProdServ");
+  });
+  data.subtotalCalculado = data.conceptos.reduce((acc, concepto) => acc + concepto.importe, 0);
+  data.impuestosGlobales = canonicalSummaryTaxesToCfdi(canonical.resumenImpuestos);
 
   const sumaTraslados = data.impuestosGlobales.reduce((acc, curr) => acc + curr.importe, 0);
   data.totalCalculado = data.subtotal - data.descuento + sumaTraslados;
-  enrichCfdiWithMathDiagnosis(data);
+  enrichCfdiWithMathDiagnosis(data, canonical);
 
   const conceptWarnings = data.conceptos
     .map((concepto, index) => ({ concepto, index }))

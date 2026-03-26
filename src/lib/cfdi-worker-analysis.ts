@@ -1,5 +1,10 @@
 import { XMLParser } from 'fast-xml-parser';
-import { enrichCfdiWithMathDiagnosis } from './cfdi-domain-adapter';
+import {
+  canonicalConceptToCfdiConcept,
+  canonicalSummaryTaxesToCfdi,
+  enrichCfdiWithMathDiagnosis,
+} from '../cfdi/application/cfdiAnalysisAdapter';
+import { normalizeCfdi } from '../cfdi/domain/normalizeCfdi';
 import type {
   AuditFinding,
   CFDIAnalysisBundle,
@@ -59,91 +64,6 @@ function summarizeDifference(xmlValue: number, calcValue: number) {
   return `XML ${xmlValue.toFixed(2)} vs cálculo ${calcValue.toFixed(2)}.`;
 }
 
-function parseConceptTaxes(conceptoNode: XmlNode): CFDIImpuesto[] {
-  const impuestosNode = conceptoNode.Impuestos as XmlNode | undefined;
-  if (!impuestosNode) return [];
-
-  const trasladosNode = impuestosNode.Traslados as XmlNode | undefined;
-  const retencionesNode = impuestosNode.Retenciones as XmlNode | undefined;
-  const traslados = asArray((trasladosNode?.Traslado as XmlNode | XmlNode[] | undefined));
-  const retenciones = asArray((retencionesNode?.Retencion as XmlNode | XmlNode[] | undefined));
-
-  return [
-    ...traslados.map((tax): CFDIImpuesto => {
-      const base = getNum(tax, 'Base');
-      const tasa = getNum(tax, 'TasaOCuota');
-      const importe = getNum(tax, 'Importe');
-      const importeCalculado = Number((base * tasa).toFixed(6));
-      return {
-        tipo: 'Traslado',
-        impuesto: getAttr(tax, 'Impuesto'),
-        base,
-        tipoFactor: getAttr(tax, 'TipoFactor'),
-        tasaOCuota: tasa,
-        importe,
-        importeCalculado,
-        diferencia: Math.abs(importe - base * tasa),
-      };
-    }),
-    ...retenciones.map((tax): CFDIImpuesto => {
-      const base = getNum(tax, 'Base');
-      const tasa = getNum(tax, 'TasaOCuota');
-      const importe = getNum(tax, 'Importe');
-      const importeCalculado = Number((base * tasa).toFixed(6));
-      return {
-        tipo: 'Retencion',
-        impuesto: getAttr(tax, 'Impuesto'),
-        base,
-        tipoFactor: getAttr(tax, 'TipoFactor'),
-        tasaOCuota: tasa,
-        importe,
-        importeCalculado,
-        diferencia: Math.abs(importe - base * tasa),
-      };
-    }),
-  ];
-}
-
-function parseConcepts(comprobante: XmlNode): CFDIConcept[] {
-  const conceptosContainer = comprobante.Conceptos as XmlNode | undefined;
-  const conceptos = asArray((conceptosContainer?.Concepto as XmlNode | XmlNode[] | undefined));
-
-  return conceptos.map((node): CFDIConcept => {
-    const cantidad = getNum(node, 'Cantidad');
-    const valorUnitario = getNum(node, 'ValorUnitario');
-    const importe = getNum(node, 'Importe');
-
-    return {
-      descripcion: getAttr(node, 'Descripcion'),
-      cantidad,
-      valorUnitario,
-      importe,
-      importeCalculado: Number((cantidad * valorUnitario).toFixed(6)),
-      diferencia: Math.abs(importe - cantidad * valorUnitario),
-      claveProdServ: getAttr(node, 'ClaveProdServ'),
-      impuestos: parseConceptTaxes(node),
-    };
-  });
-}
-
-function parseGlobalTaxes(comprobante: XmlNode): CFDIImpuesto[] {
-  const impuestosNode = comprobante.Impuestos as XmlNode | undefined;
-  if (!impuestosNode) return [];
-  const trasladosNode = impuestosNode.Traslados as XmlNode | undefined;
-  const traslados = asArray((trasladosNode?.Traslado as XmlNode | XmlNode[] | undefined));
-
-  return traslados.map((tax): CFDIImpuesto => ({
-    tipo: 'Traslado',
-    impuesto: getAttr(tax, 'Impuesto'),
-    base: getNum(tax, 'Base'),
-    tipoFactor: getAttr(tax, 'TipoFactor'),
-    tasaOCuota: getNum(tax, 'TasaOCuota'),
-    importe: getNum(tax, 'Importe'),
-    importeCalculado: 0,
-    diferencia: 0,
-  }));
-}
-
 export function detectCFDIProfileWorker(xml: string): CFDIProfile {
   const comprobante = getComprobanteRoot(xml);
   const complemento = comprobante.Complemento as XmlNode | undefined;
@@ -163,11 +83,17 @@ export function detectCFDIProfileWorker(xml: string): CFDIProfile {
 
 export function parseCFDIWorker(xml: string): CFDIData {
   const comprobante = getComprobanteRoot(xml);
+  const canonical = normalizeCfdi(xml);
   const emisor = comprobante.Emisor as XmlNode | undefined;
   const receptor = comprobante.Receptor as XmlNode | undefined;
   const timbre = getTimbre(comprobante);
-  const conceptos = parseConcepts(comprobante);
-  const impuestosGlobales = parseGlobalTaxes(comprobante);
+  const conceptosContainer = comprobante.Conceptos as XmlNode | undefined;
+  const conceptoNodes = asArray((conceptosContainer?.Concepto as XmlNode | XmlNode[] | undefined));
+  const conceptos = canonical.conceptos.map((concepto, index): CFDIConcept => ({
+    ...canonicalConceptToCfdiConcept(concepto),
+    claveProdServ: getAttr(conceptoNodes[index], 'ClaveProdServ'),
+  }));
+  const impuestosGlobales = canonicalSummaryTaxesToCfdi(canonical.resumenImpuestos);
 
   const data: CFDIData = {
     version: getAttr(comprobante, 'Version'),
@@ -196,7 +122,7 @@ export function parseCFDIWorker(xml: string): CFDIData {
 
   const sumaTraslados = impuestosGlobales.reduce((acc, tax) => acc + tax.importe, 0);
   data.totalCalculado = data.subtotal - data.descuento + sumaTraslados;
-  enrichCfdiWithMathDiagnosis(data);
+  enrichCfdiWithMathDiagnosis(data, canonical);
 
   const conceptWarnings = conceptos
     .map((concepto, index) => ({ concepto, index }))
