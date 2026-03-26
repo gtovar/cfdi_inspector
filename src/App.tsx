@@ -141,6 +141,13 @@ function getExplainedTaxLabel(code: string) {
     : `${code} · ${explained.meaning.split('.')[0]}`;
 }
 
+function getFindingOriginLabel(findingId: string) {
+  if (findingId.startsWith('math-')) return 'Matemático';
+  if (findingId.startsWith('tax-group-')) return 'Fiscal';
+  if (findingId.startsWith('concept-')) return 'Concepto';
+  return 'Operativo';
+}
+
 export default function App() {
   const [profile, setProfile] = useState<CFDIProfile>('unknown');
   const [cfdi, setCfdi] = useState<CFDIData | null>(null);
@@ -1049,9 +1056,18 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                       size={16}
                     />
                     <div>
-                      <p className={`text-xs font-semibold ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
-                        {finding.title}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono ${
+                          finding.severity === 'critical'
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          {getFindingOriginLabel(finding.id)}
+                        </span>
+                        <p className={`text-xs font-semibold ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
+                          {finding.title}
+                        </p>
+                      </div>
                       <p className={`text-xs font-mono leading-relaxed mt-1 ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
                         {finding.summary}
                       </p>
@@ -1164,19 +1180,28 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                         className="px-3 py-2 text-[10px] font-mono"
                         title={getExplainedMeaning('impuesto', group.impuesto)}
                       >
-                        {getExplainedTaxLabel(group.impuesto)}
+                        <div>{getExplainedTaxLabel(group.impuesto)}</div>
+                        <div className="text-[9px] opacity-50 mt-0.5">
+                          {getExplainedMeaning('impuesto', group.impuesto)}
+                        </div>
                       </td>
                       <td
                         className="px-3 py-2 text-[10px]"
                         title={getExplainedMeaning('tipoFactor', group.tipoFactor)}
                       >
-                        {group.tipoFactor}
+                        <div>{group.tipoFactor}</div>
+                        <div className="text-[9px] opacity-50 mt-0.5">
+                          {getExplainedMeaning('tipoFactor', group.tipoFactor)}
+                        </div>
                       </td>
                       <td
                         className="px-3 py-2 text-[10px] font-mono text-right"
                         title={getExplainedMeaning('tasaOCuota', group.tasaOCuota)}
                       >
-                        {(group.tasaOCuota * 100).toFixed(2)}%
+                        <div>{(group.tasaOCuota * 100).toFixed(2)}%</div>
+                        <div className="text-[9px] opacity-50 mt-0.5">
+                          {getExplainedMeaning('tasaOCuota', group.tasaOCuota)}
+                        </div>
                       </td>
                       <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeDetalle.toFixed(2)}</td>
                       <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeAgrupado.toFixed(2)}</td>

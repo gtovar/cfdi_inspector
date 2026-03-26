@@ -3,12 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {
-  canonicalConceptToCfdiConcept,
-  canonicalSummaryTaxesToCfdi,
-  enrichCfdiWithMathDiagnosis,
-} from '../cfdi/application/cfdiAnalysisAdapter';
-import { normalizeCfdi } from '../cfdi/domain/normalizeCfdi';
+import { buildCfdiData, detectCfdiProfile } from '../cfdi/application/cfdiAnalysisService';
 
 export interface CFDIConcept {
   descripcion: string;
@@ -136,198 +131,8 @@ export interface CFDIAnalysisBundle {
   pagoRows: CFDIPagoRow[];
 }
 
-function summarizeDifference(xmlValue: number, calcValue: number) {
-  return `XML ${xmlValue.toFixed(2)} vs cálculo ${calcValue.toFixed(2)}.`;
-}
-
 export function parseCFDI(xmlString: string): CFDIData {
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlString, "text/xml");
-  const canonical = normalizeCfdi(xmlString);
-  
-  const ns = {
-    cfdi: "http://www.sat.gob.mx/cfdv4",
-    tfd: "http://www.sat.gob.mx/TimbreFiscalDigital"
-  };
-
-  const getAttr = (el: Element | null, name: string) => el?.getAttribute(name) || "";
-  const getNum = (el: Element | null, name: string) => parseFloat(el?.getAttribute(name) || "0");
-
-  const comprobante = xmlDoc.getElementsByTagNameNS("*", "Comprobante")[0];
-  const emisorEl = xmlDoc.getElementsByTagNameNS("*", "Emisor")[0];
-  const receptorEl = xmlDoc.getElementsByTagNameNS("*", "Receptor")[0];
-  const timbreEl = xmlDoc.getElementsByTagNameNS("*", "TimbreFiscalDigital")[0];
-
-  const data: CFDIData = {
-    version: getAttr(comprobante, "Version"),
-    fecha: getAttr(comprobante, "Fecha"),
-    uuid: getAttr(timbreEl, "UUID"),
-    emisor: getAttr(emisorEl, "Nombre") || getAttr(emisorEl, "Rfc"),
-    receptor: getAttr(receptorEl, "Nombre") || getAttr(receptorEl, "Rfc"),
-    subtotal: getNum(comprobante, "SubTotal"),
-    descuento: getNum(comprobante, "Descuento"),
-    total: getNum(comprobante, "Total"),
-    conceptos: [],
-    impuestosGlobales: [],
-    subtotalCalculado: 0,
-    totalCalculado: 0,
-    hallazgos: [],
-    findings: [],
-    impactedConceptIndexes: [],
-    taxAuditGroups: [],
-    verdict: {
-      status: 'clean',
-      title: 'Sin discrepancias detectadas',
-      summary: 'Los importes principales cuadran con el cálculo actual.',
-    },
-    supportText: ''
-  };
-
-  data.conceptos = canonical.conceptos.map(canonicalConceptToCfdiConcept);
-  data.conceptos.forEach((concepto, index) => {
-    const conceptosNodes = xmlDoc.getElementsByTagNameNS("*", "Concepto");
-    const sourceNode = conceptosNodes[index] ?? null;
-    data.conceptos[index].claveProdServ = getAttr(sourceNode, "ClaveProdServ");
-  });
-  data.subtotalCalculado = data.conceptos.reduce((acc, concepto) => acc + concepto.importe, 0);
-  data.impuestosGlobales = canonicalSummaryTaxesToCfdi(canonical.resumenImpuestos);
-
-  const sumaTraslados = data.impuestosGlobales.reduce((acc, curr) => acc + curr.importe, 0);
-  data.totalCalculado = data.subtotal - data.descuento + sumaTraslados;
-  enrichCfdiWithMathDiagnosis(data, canonical);
-
-  const conceptWarnings = data.conceptos
-    .map((concepto, index) => ({ concepto, index }))
-    .filter(({ concepto }) => concepto.diferencia !== 0)
-    .sort((a, b) => b.concepto.diferencia - a.concepto.diferencia)
-    .slice(0, 3);
-
-  conceptWarnings.forEach(({ concepto, index }) => {
-    const summary = `${concepto.descripcion}: ${summarizeDifference(concepto.importe, concepto.importeCalculado)}`;
-    data.findings.push({
-      id: `concept-${index}`,
-      severity: concepto.diferencia > 0.01 ? 'critical' : 'warning',
-      title: `Importe inconsistente en concepto ${index + 1}`,
-      summary,
-    });
-    if (!data.impactedConceptIndexes.includes(index)) {
-      data.impactedConceptIndexes.push(index);
-    }
-  });
-
-  data.impactedConceptIndexes.sort((a, b) => a - b);
-
-  const taxGroupMap = new Map<string, TaxAuditGroup>();
-
-  data.conceptos.forEach((concepto, conceptIndex) => {
-    concepto.impuestos.forEach((impuesto) => {
-      const key = `${impuesto.impuesto}|${impuesto.tipoFactor}|${impuesto.tasaOCuota}`;
-      const current = taxGroupMap.get(key) ?? {
-        key,
-        impuesto: impuesto.impuesto,
-        tipoFactor: impuesto.tipoFactor,
-        tasaOCuota: impuesto.tasaOCuota,
-        importeDetalle: 0,
-        importeAgrupado: 0,
-        diferencia: 0,
-        conceptos: [],
-      };
-
-      current.importeDetalle += impuesto.importe;
-      if (!current.conceptos.includes(conceptIndex)) {
-        current.conceptos.push(conceptIndex);
-      }
-      taxGroupMap.set(key, current);
-    });
-  });
-
-  data.impuestosGlobales.forEach((impuesto) => {
-    const key = `${impuesto.impuesto}|${impuesto.tipoFactor}|${impuesto.tasaOCuota}`;
-    const current = taxGroupMap.get(key) ?? {
-      key,
-      impuesto: impuesto.impuesto,
-      tipoFactor: impuesto.tipoFactor,
-      tasaOCuota: impuesto.tasaOCuota,
-      importeDetalle: 0,
-      importeAgrupado: 0,
-      diferencia: 0,
-      conceptos: [],
-    };
-
-    current.importeAgrupado += impuesto.importe;
-    taxGroupMap.set(key, current);
-  });
-
-  data.taxAuditGroups = Array.from(taxGroupMap.values())
-    .map((group) => ({
-      ...group,
-      diferencia: group.importeAgrupado - group.importeDetalle,
-    }))
-    .sort((a, b) => Math.abs(b.diferencia) - Math.abs(a.diferencia));
-
-  data.taxAuditGroups
-    .filter((group) => Math.abs(group.diferencia) !== 0)
-    .slice(0, 3)
-    .forEach((group) => {
-      data.findings.push({
-        id: `tax-group-${group.key}`,
-        severity: Math.abs(group.diferencia) > 0.01 ? 'critical' : 'warning',
-        title: `Diferencia en traslado ${group.impuesto} ${(group.tasaOCuota * 100).toFixed(2)}%`,
-        summary: `Detalle ${group.importeDetalle.toFixed(2)} vs agrupado ${group.importeAgrupado.toFixed(2)}.`,
-      });
-
-      group.conceptos.forEach((index) => {
-        if (!data.impactedConceptIndexes.includes(index)) {
-          data.impactedConceptIndexes.push(index);
-        }
-      });
-    });
-
-  data.impactedConceptIndexes.sort((a, b) => a - b);
-
-  if (data.findings.length === 0 && data.hallazgos.length === 0) {
-    data.hallazgos = [];
-  }
-
-  const uniqueFindings = new Map<string, AuditFinding>();
-  data.findings.forEach((finding) => {
-    const key = `${finding.severity}|${finding.title}|${finding.summary}`;
-    if (!uniqueFindings.has(key)) {
-      uniqueFindings.set(key, finding);
-    }
-  });
-
-  data.findings = Array.from(uniqueFindings.values()).sort((a, b) => {
-    if (a.severity !== b.severity) {
-      return a.severity === 'critical' ? -1 : 1;
-    }
-    return a.title.localeCompare(b.title, 'es');
-  });
-
-  const criticalFindings = data.findings.filter((finding) => finding.severity === 'critical').length;
-  const warningFindings = data.findings.filter((finding) => finding.severity === 'warning').length;
-
-  if (criticalFindings > 0) {
-    data.verdict = {
-      status: 'critical',
-      title: 'CFDI con discrepancias críticas',
-      summary: `Se detectaron ${criticalFindings} hallazgo(s) críticos que requieren revisión operativa.`,
-    };
-  } else if (warningFindings > 0) {
-    data.verdict = {
-      status: 'review',
-      title: 'CFDI requiere revisión',
-      summary: `Hay ${warningFindings} alerta(s) menores, probablemente asociadas a redondeo o captura.`,
-    };
-  }
-
-  data.supportText = [
-    data.verdict.title,
-    data.verdict.summary,
-    ...data.findings.slice(0, 5).map((finding) => `${finding.title}: ${finding.summary}`),
-  ].join('\n');
-
-  return data;
+  return buildCfdiData(xmlString);
 }
 
 export function extractIngresoRows(xmlString: string): CFDIIngresoRow[] {
@@ -577,42 +382,11 @@ export function extractPagoRows(xmlString: string): CFDIPagoRow[] {
 }
 
 export function detectCFDIProfile(xmlString: string): CFDIProfile {
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlString, 'text/xml');
-  const parseError = xmlDoc.querySelector('parsererror');
-
-  if (parseError) {
+  try {
+    return detectCfdiProfile(xmlString);
+  } catch {
     return 'unknown';
   }
-
-  const root = xmlDoc.documentElement;
-  const getNodes = (parent: Document | Element, localName: string) =>
-    Array.from(parent.getElementsByTagNameNS('*', localName));
-  const getAttr = (el: Element | null, name: string) => el?.getAttribute(name) || '';
-
-  const complementos = getNodes(root, 'Complemento');
-  const pagosNodes = getNodes(root, 'Pago');
-  const doctosRelacionados = getNodes(root, 'DoctoRelacionado');
-
-  const hasPagosComplement = complementos.some((complemento) =>
-    Array.from(complemento.children).some((child) => {
-      const childName = child.localName || child.nodeName.split(':').pop() || '';
-      return childName.includes('Pagos');
-    })
-  );
-
-  if (hasPagosComplement || pagosNodes.length > 0 || doctosRelacionados.length > 0) {
-    return 'pagos';
-  }
-
-  const tipoDeComprobante = getAttr(root, 'TipoDeComprobante');
-  const conceptos = getNodes(root, 'Concepto');
-
-  if (tipoDeComprobante === 'I' || conceptos.length > 0) {
-    return 'ingreso';
-  }
-
-  return 'unknown';
 }
 
 export function analyzeCFDI(xmlString: string): CFDIAnalysisBundle {
