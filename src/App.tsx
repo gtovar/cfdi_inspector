@@ -4,22 +4,14 @@
  */
 
 import { useMemo, useState } from 'react';
-import { 
-  FileText, 
-  CheckCircle2, 
-  ArrowLeft,
-  Database,
-  User,
-  Calendar,
-  Sparkles
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-import type { CFDIData, CFDIConcept, CFDIProfile, CFDIIngresoRow, CFDIPagoRow } from './cfdi/public';
+import { CheckCircle2, ArrowLeft, Sparkles } from 'lucide-react';
+import type { CFDIData, CFDIConcept, CFDIIngresoRow, CFDIPagoRow } from './cfdi/public';
 import { useCfdiAnalysis } from './app/hooks/useCfdiAnalysis';
 import { useCfdiExports } from './app/hooks/useCfdiExports';
 import { useExtractGridState, type ExtractMode, type ExtractSortDirection } from './app/hooks/useExtractGridState';
+import { buildExtractMetrics, buildSummaryFields, getProfileLabel } from './app/view-models/cfdiViewModels';
 import { explainCfdiField } from './cfdi/domain/explainCfdiField';
-import CfdiSummaryHeader, { type SummaryFieldCard } from './components/CfdiSummaryHeader';
+import CfdiSummaryHeader from './components/CfdiSummaryHeader';
 import ConceptDetailModal from './components/ConceptDetailModal';
 import ExtractWorkspace from './components/ExtractWorkspace';
 import FindingsSidebar from './components/FindingsSidebar';
@@ -33,12 +25,6 @@ function formatExact(value: number) {
     minimumFractionDigits: 0,
     maximumFractionDigits: 20,
   });
-}
-
-interface SummaryMetricCard {
-  key: string;
-  label: string;
-  value: string;
 }
 
 const INGRESO_COLUMNS = [
@@ -97,28 +83,6 @@ function getDiagnoseCellValue(concept: CFDIConcept, key: string) {
   }
 }
 
-function getProfileLabel(profile: CFDIProfile) {
-  switch (profile) {
-    case 'ingreso':
-      return 'Ingreso';
-    case 'pagos':
-      return 'Pagos';
-    default:
-      return 'Desconocido';
-  }
-}
-
-function getProfileRecommendation(profile: CFDIProfile) {
-  switch (profile) {
-    case 'ingreso':
-      return 'Sugerido: diagnostico arriba y tabla operativa abajo';
-    case 'pagos':
-      return 'Sugerido: tabla operativa de pagos';
-    default:
-      return 'Sugerido: revisar el XML antes de extraer';
-  }
-}
-
 function getExplainedMeaning(key: string, value: string | number | null) {
   return explainCfdiField(key, value).meaning;
 }
@@ -148,7 +112,6 @@ export default function App() {
     analysisStageLabel,
     analysisStageProgress,
     analysisStageDetail,
-    sourceXml,
     handleFileSelect,
     resetAnalysis,
   } = useCfdiAnalysis();
@@ -205,21 +168,6 @@ export default function App() {
   const visibleDiagnoseColumns = DIAGNOSE_COLUMNS.filter((column) => !hiddenDiagnoseColumns.includes(column.key));
   const filteredIngresoRows = activeDatasetType === 'ingresos' ? filteredExtractRows as CFDIIngresoRow[] : ingresoRows;
   const filteredPagoRows = activeDatasetType === 'pagos' ? filteredExtractRows as CFDIPagoRow[] : pagoRows;
-  const conceptosDetectados = new Set(
-    ingresoRows.map((row) => `${row.uuid}|${row.claveProdServ}|${row.descripcion}|${row.importe}`)
-  ).size;
-  const conceptosConImpuesto = new Set(
-    ingresoRows
-      .filter((row) => row.tipoImp)
-      .map((row) => `${row.uuid}|${row.claveProdServ}|${row.descripcion}`)
-  ).size;
-  const pagosDetectados = new Set(
-    pagoRows.map((row) => `${row.uuidCFDI}|${row.fechaPago}|${row.monto}|${row.formaPago}`)
-  ).size;
-  const doctosRelacionadosDetectados = new Set(
-    pagoRows.map((row) => `${row.uuidCFDI}|${row.uuidDR}|${row.serieFolio}|${row.parcialidad}`)
-  ).size;
-  const registrosConImpuestoDr = pagoRows.filter((row) => row.impuestoDR || row.importeDR).length;
 
   const filteredConceptos = conceptPool.filter((concept) => {
     const search = diagnoseSearchTerm.trim().toLowerCase();
@@ -275,65 +223,15 @@ export default function App() {
   const diagnosePageStart = filteredDiagnoseCount === 0 ? 0 : (safeDiagnosePage - 1) * diagnosePageSize;
   const currentDiagnoseRows = sortedDiagnoseRows.slice(diagnosePageStart, diagnosePageStart + diagnosePageSize);
 
-  const summaryFieldBuilders: Record<CFDIProfile, () => SummaryFieldCard[]> = {
-    ingreso: () => (cfdi ? [
-      { key: 'emisor', label: 'Emisor', value: cfdi.emisor || '-', icon: User, meaning: 'Nombre o RFC del emisor detectado en el CFDI.' },
-      { key: 'uuid', label: 'UUID', value: cfdi.uuid || '-', icon: FileText, meaning: 'Identificador fiscal único del comprobante timbrado.' },
-      { key: 'receptor', label: 'Receptor', value: cfdi.receptor || '-', icon: Database, meaning: 'Nombre o RFC del receptor detectado en el CFDI.' },
-      {
-        key: 'fecha',
-        label: 'Fecha timbrado',
-        value: cfdi.fecha ? new Date(cfdi.fecha).toLocaleString() : '-',
-        icon: Calendar,
-        meaning: 'Fecha detectada del comprobante para esta lectura operativa.',
-      },
-    ] : []),
-    pagos: () => {
-      const firstPago = pagoRows[0];
-      return [
-        { key: 'emisor', label: 'Emisor', value: cfdi?.emisor || firstPago?.rfcEmisor || '-', icon: User, meaning: 'Nombre o RFC del emisor detectado en el CFDI.' },
-        { key: 'uuid', label: 'UUID', value: cfdi?.uuid || firstPago?.uuidCFDI || '-', icon: FileText, meaning: 'Identificador fiscal único del comprobante timbrado.' },
-        { key: 'receptor', label: 'Receptor', value: cfdi?.receptor || firstPago?.rfcReceptor || '-', icon: Database, meaning: 'Nombre o RFC del receptor detectado en el CFDI.' },
-        {
-          key: 'fecha',
-          label: 'Fecha CFDI',
-          value: firstPago?.fechaCFDI ? new Date(firstPago.fechaCFDI).toLocaleString() : (cfdi?.fecha ? new Date(cfdi.fecha).toLocaleString() : '-'),
-          icon: Calendar,
-          meaning: 'Fecha detectada del comprobante para esta lectura operativa.',
-        },
-      ];
-    },
-    unknown: () => (cfdi ? [
-      { key: 'emisor', label: 'Emisor', value: cfdi.emisor || '-', icon: User, meaning: 'Nombre o RFC del emisor detectado en el CFDI.' },
-      { key: 'uuid', label: 'UUID', value: cfdi.uuid || '-', icon: FileText, meaning: 'Identificador fiscal único del comprobante timbrado.' },
-      { key: 'receptor', label: 'Receptor', value: cfdi.receptor || '-', icon: Database, meaning: 'Nombre o RFC del receptor detectado en el CFDI.' },
-      {
-        key: 'fecha',
-        label: 'Fecha detectada',
-        value: cfdi.fecha ? new Date(cfdi.fecha).toLocaleString() : '-',
-        icon: Calendar,
-        meaning: 'Fecha detectada del comprobante para esta lectura operativa.',
-      },
-    ] : []),
-  };
-
-  const extractMetricBuilders: Record<ExtractMode, () => SummaryMetricCard[]> = {
-    ingresos: () => [
-      { key: 'rows', label: 'Registros', value: filteredIngresoRows.length.toLocaleString('es-MX') },
-      { key: 'concepts', label: 'Conceptos', value: conceptosDetectados.toLocaleString('es-MX') },
-      { key: 'taxed', label: 'Con impuesto', value: conceptosConImpuesto.toLocaleString('es-MX') },
-      { key: 'results', label: 'Resultados', value: extractSearchTerm ? 'Filtrados' : 'Todos' },
-    ],
-    pagos: () => [
-      { key: 'rows', label: 'Registros', value: filteredPagoRows.length.toLocaleString('es-MX') },
-      { key: 'payments', label: 'Pagos', value: pagosDetectados.toLocaleString('es-MX') },
-      { key: 'documents', label: 'Doctos Rel.', value: doctosRelacionadosDetectados.toLocaleString('es-MX') },
-      { key: 'drTax', label: 'Con impuesto DR', value: registrosConImpuestoDr.toLocaleString('es-MX') },
-    ],
-  };
-
-  const summaryFields = summaryFieldBuilders[profile]?.() ?? [];
-  const activeExtractMetrics = extractMetricBuilders[activeDatasetType]();
+  const summaryFields = buildSummaryFields({ profile, cfdi, pagoRows });
+  const activeExtractMetrics = buildExtractMetrics({
+    activeDatasetType,
+    extractSearchTerm,
+    filteredIngresoRows,
+    filteredPagoRows,
+    ingresoRows,
+    pagoRows,
+  });
   const {
     reportExported,
     taxesExported,
