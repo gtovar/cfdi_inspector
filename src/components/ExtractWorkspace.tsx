@@ -1,63 +1,21 @@
 import ExtractWorkspacePagination from './extract-workspace/ExtractWorkspacePagination';
 import ExtractWorkspaceTable from './extract-workspace/ExtractWorkspaceTable';
 import ExtractWorkspaceToolbar from './extract-workspace/ExtractWorkspaceToolbar';
-import type { ExtractColumn, ExtractMode, ExtractSortDirection } from './extract-workspace/types';
+import type { ExtractColumn, ExtractGridController, ExtractMode } from './extract-workspace/types';
 
 interface ExtractWorkspaceProps {
   embedded?: boolean;
   activeDatasetType: ExtractMode;
-  extractColumns: readonly ExtractColumn[];
-  extractColumnFilterKey: string;
-  extractSearchTerm: string;
-  extractSortKey: string;
-  extractSortDirection: ExtractSortDirection;
-  extractPageSize: number;
-  activeHiddenColumns: string[];
-  visibleExtractColumns: readonly ExtractColumn[];
-  filteredExtractCount: number;
-  safeExtractPage: number;
-  extractTotalPages: number;
-  extractPageStart: number;
-  currentPageRows: Record<string, string>[];
-  getExtractCellValue: (row: Record<string, string>, key: string) => string;
-  onColumnFilterChange: (value: string) => void;
-  onSearchChange: (value: string) => void;
-  onSortKeyChange: (value: string) => void;
-  onSortDirectionToggle: () => void;
-  onPageSizeChange: (value: number) => void;
-  onResetGrid: () => void;
-  onToggleColumn: (columnKey: string, hidden: boolean) => void;
-  onPrevPage: () => void;
-  onNextPage: () => void;
+  grid: ExtractGridController;
 }
 
 export default function ExtractWorkspace({
   embedded = false,
   activeDatasetType,
-  extractColumns,
-  extractColumnFilterKey,
-  extractSearchTerm,
-  extractSortKey,
-  extractSortDirection,
-  extractPageSize,
-  activeHiddenColumns,
-  visibleExtractColumns,
-  filteredExtractCount,
-  safeExtractPage,
-  extractTotalPages,
-  extractPageStart,
-  currentPageRows,
-  getExtractCellValue,
-  onColumnFilterChange,
-  onSearchChange,
-  onSortKeyChange,
-  onSortDirectionToggle,
-  onPageSizeChange,
-  onResetGrid,
-  onToggleColumn,
-  onPrevPage,
-  onNextPage,
+  grid,
 }: ExtractWorkspaceProps) {
+  const { extractColumns, activeHiddenColumns, toggleColumn } = grid;
+
   return (
     <section className={embedded ? 'flex-1 min-h-0 border-t border-[#141414] bg-white/10 flex flex-col' : 'flex-1 flex flex-col overflow-hidden relative'}>
       {embedded ? null : (
@@ -83,20 +41,7 @@ export default function ExtractWorkspace({
         </div>
       )}
 
-      <ExtractWorkspaceToolbar
-        extractColumns={extractColumns}
-        extractColumnFilterKey={extractColumnFilterKey}
-        extractSearchTerm={extractSearchTerm}
-        extractSortKey={extractSortKey}
-        extractSortDirection={extractSortDirection}
-        extractPageSize={extractPageSize}
-        onColumnFilterChange={onColumnFilterChange}
-        onSearchChange={onSearchChange}
-        onSortKeyChange={onSortKeyChange}
-        onSortDirectionToggle={onSortDirectionToggle}
-        onPageSizeChange={onPageSizeChange}
-        onResetGrid={onResetGrid}
-      />
+      <ExtractWorkspaceToolbar grid={grid} />
 
       <div className="border-b border-[#141414]/10 bg-[#E4E3E0] px-4 py-2">
         <div className="flex flex-wrap items-center gap-2">
@@ -106,7 +51,7 @@ export default function ExtractWorkspace({
             return (
               <button
                 key={column.key}
-                onClick={() => onToggleColumn(column.key, hidden)}
+                onClick={() => toggleColumn(column.key, hidden)}
                 className={`px-2.5 py-1 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
                   hidden
                     ? 'border-[#141414]/10 text-[#141414]/35 bg-white/50'
@@ -121,24 +66,9 @@ export default function ExtractWorkspace({
       </div>
 
       <div className="flex-1 overflow-auto">
-        <ExtractWorkspaceTable
-          activeDatasetType={activeDatasetType}
-          visibleExtractColumns={visibleExtractColumns}
-          filteredExtractCount={filteredExtractCount}
-          extractPageStart={extractPageStart}
-          currentPageRows={currentPageRows}
-          getExtractCellValue={getExtractCellValue}
-        />
+        <ExtractWorkspaceTable activeDatasetType={activeDatasetType} grid={grid} />
       </div>
-      <ExtractWorkspacePagination
-        safeExtractPage={safeExtractPage}
-        extractTotalPages={extractTotalPages}
-        filteredExtractCount={filteredExtractCount}
-        extractPageStart={extractPageStart}
-        currentPageRowCount={currentPageRows.length}
-        onPrevPage={onPrevPage}
-        onNextPage={onNextPage}
-      />
+      <ExtractWorkspacePagination grid={grid} />
     </section>
   );
 }

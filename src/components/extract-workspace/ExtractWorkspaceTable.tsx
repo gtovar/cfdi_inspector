@@ -1,23 +1,36 @@
-import type { ExtractColumn, ExtractMode } from './types';
+import { flexRender } from '@tanstack/react-table';
+import { useMemo, useState } from 'react';
+import type { ExtractGridController, ExtractMode } from './types';
+
+const ROW_HEIGHT = 34;
+const OVERSCAN = 8;
 
 interface ExtractWorkspaceTableProps {
   activeDatasetType: ExtractMode;
-  visibleExtractColumns: readonly ExtractColumn[];
-  filteredExtractCount: number;
-  extractPageStart: number;
-  currentPageRows: Record<string, string>[];
-  getExtractCellValue: (row: Record<string, string>, key: string) => string;
+  grid: ExtractGridController;
 }
 
-export default function ExtractWorkspaceTable({
-  activeDatasetType,
-  visibleExtractColumns,
-  filteredExtractCount,
-  extractPageStart,
-  currentPageRows,
-  getExtractCellValue,
-}: ExtractWorkspaceTableProps) {
-  if (visibleExtractColumns.length === 0) {
+export default function ExtractWorkspaceTable({ activeDatasetType, grid }: ExtractWorkspaceTableProps) {
+  const { filteredExtractCount, table, setColumnFilterValue, setSorting, toggleAllPageRowsSelected } = grid;
+  const visibleColumns = table.getVisibleLeafColumns();
+  const rows = table.getRowModel().rows;
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(520);
+
+  const virtualization = useMemo(() => {
+    const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+    const visibleCount = Math.ceil(viewportHeight / ROW_HEIGHT) + OVERSCAN * 2;
+    const endIndex = Math.min(rows.length, startIndex + visibleCount);
+    return {
+      startIndex,
+      endIndex,
+      topSpacerHeight: startIndex * ROW_HEIGHT,
+      bottomSpacerHeight: Math.max(0, (rows.length - endIndex) * ROW_HEIGHT),
+      visibleRows: rows.slice(startIndex, endIndex),
+    };
+  }, [rows, scrollTop, viewportHeight]);
+
+  if (visibleColumns.length === 0) {
     return (
       <div className="p-16 text-center text-xs font-mono opacity-45">
         Todas las columnas estan ocultas. Usa los toggles de columnas o `Reset grid`.
@@ -36,35 +49,140 @@ export default function ExtractWorkspaceTable({
   }
 
   return (
-    <table className="w-full border-collapse">
-      <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]/10">
-        <tr className="text-left text-[10px] font-mono uppercase opacity-50">
-          {visibleExtractColumns.map((column) => (
-            <th key={column.key} className="px-3 py-2 font-normal whitespace-nowrap">
-              {column.label}
-            </th>
+    <div
+      className="h-full overflow-auto"
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      ref={(node) => {
+        if (!node) return;
+        const nextHeight = node.clientHeight || 520;
+        if (nextHeight !== viewportHeight) {
+          setViewportHeight(nextHeight);
+        }
+      }}
+    >
+      <table className="w-full border-collapse table-fixed">
+        <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]/10">
+          {table.getHeaderGroups().map((headerGroup) => (
+            <tr key={headerGroup.id} className="text-left text-[10px] font-mono uppercase opacity-50">
+              <th className="w-10 px-2 py-2 font-normal">
+                <input
+                  type="checkbox"
+                  checked={table.getIsAllPageRowsSelected()}
+                  ref={(node) => {
+                    if (node) node.indeterminate = table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected();
+                  }}
+                  onChange={toggleAllPageRowsSelected}
+                />
+              </th>
+              {headerGroup.headers.map((header) => {
+                const sortIndex = header.column.getSortIndex();
+                const sorted = header.column.getIsSorted();
+                return (
+                  <th
+                    key={header.id}
+                    className="px-3 py-2 font-normal whitespace-nowrap align-top relative"
+                    style={{ width: header.getSize() }}
+                  >
+                    {header.isPlaceholder ? null : (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={(event) => header.column.toggleSorting(undefined, event.shiftKey)}
+                            className="font-normal text-left hover:opacity-100 opacity-80"
+                          >
+                            {flexRender(header.column.columnDef.header, header.getContext())}
+                          </button>
+                          {sorted ? (
+                            <span className="text-[9px] opacity-70">
+                              {sortIndex >= 0 ? `${sortIndex + 1}.` : null} {sorted === 'desc' ? 'desc' : 'asc'}
+                            </span>
+                          ) : null}
+                        </div>
+                        <input
+                          type="text"
+                          value={String(header.column.getFilterValue() ?? '')}
+                          onChange={(event) => setColumnFilterValue(header.column.id, event.target.value)}
+                          placeholder="Filtrar..."
+                          className="w-full px-2 py-1 bg-white/70 border border-[#141414]/15 text-[10px] font-mono normal-case tracking-normal"
+                        />
+                        <div className="flex items-center gap-1 normal-case">
+                          <button
+                            type="button"
+                            onClick={() => grid.moveColumn(header.column.id, 'left')}
+                            className="px-1.5 py-0.5 border border-[#141414]/10 text-[9px]"
+                          >
+                            ←
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => grid.moveColumn(header.column.id, 'right')}
+                            className="px-1.5 py-0.5 border border-[#141414]/10 text-[9px]"
+                          >
+                            →
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    <div
+                      onMouseDown={header.getResizeHandler()}
+                      onTouchStart={header.getResizeHandler()}
+                      className={`absolute top-0 right-0 h-full w-1 cursor-col-resize select-none ${
+                        header.column.getIsResizing() ? 'bg-[#141414]' : 'bg-[#141414]/15'
+                      }`}
+                    />
+                  </th>
+                );
+              })}
+            </tr>
           ))}
-        </tr>
-      </thead>
-      <tbody>
-        {currentPageRows.map((row, index) => (
-          <tr
-            key={`${activeDatasetType}-${extractPageStart + index}`}
-            className="border-b border-[#141414]/10 hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
-          >
-            {visibleExtractColumns.map((column) => (
-              <td
-                key={column.key}
-                className={`px-3 py-2 whitespace-nowrap overflow-hidden text-ellipsis ${
-                  column.key === 'descripcion' ? 'text-[11px] max-w-[320px]' : 'text-[9px] font-mono max-w-[240px]'
-                }`}
-              >
-                {getExtractCellValue(row, column.key) || '-'}
+        </thead>
+        <tbody>
+          {virtualization.topSpacerHeight > 0 ? (
+            <tr>
+              <td colSpan={visibleColumns.length + 1} style={{ height: virtualization.topSpacerHeight }} />
+            </tr>
+          ) : null}
+          {virtualization.visibleRows.map((row) => (
+            <tr
+              key={row.id}
+              className={`border-b border-[#141414]/10 hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors ${
+                row.getIsSelected() ? 'bg-[#141414]/10' : ''
+              }`}
+              style={{ height: ROW_HEIGHT }}
+            >
+              <td className="px-2 py-2 text-center">
+                <input
+                  type="checkbox"
+                  checked={row.getIsSelected()}
+                  onChange={row.getToggleSelectedHandler()}
+                />
               </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+              {row.getVisibleCells().map((cell) => (
+                <td
+                  key={cell.id}
+                  className={`px-3 py-2 whitespace-nowrap overflow-hidden text-ellipsis ${
+                    cell.column.id === 'descripcion' ? 'text-[11px] max-w-[320px]' : 'text-[9px] font-mono max-w-[240px]'
+                  }`}
+                  style={{ width: cell.column.getSize() }}
+                >
+                  {flexRender(cell.column.columnDef.cell, cell.getContext()) || '-'}
+                </td>
+              ))}
+            </tr>
+          ))}
+          {virtualization.bottomSpacerHeight > 0 ? (
+            <tr>
+              <td colSpan={visibleColumns.length + 1} style={{ height: virtualization.bottomSpacerHeight }} />
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+      {table.getState().sorting.length > 0 ? (
+        <div className="px-4 py-2 border-t border-[#141414]/10 bg-white/70 text-[10px] font-mono uppercase tracking-widest opacity-70 sticky bottom-0">
+          Multi-sort activo. Usa Shift + click en encabezados para agregar o quitar niveles.
+        </div>
+      ) : null}
+    </div>
   );
 }

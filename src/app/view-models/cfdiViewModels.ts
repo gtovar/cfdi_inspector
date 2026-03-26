@@ -1,7 +1,7 @@
 import { Calendar, Database, FileText, User } from 'lucide-react';
 import type { CFDIData, CFDIIngresoRow, CFDIPagoRow, CFDIProfile } from '../../cfdi/public';
 import type { SummaryFieldCard } from '../../components/CfdiSummaryHeader';
-import type { ExtractMode } from '../hooks/useExtractGridState';
+import type { ExtractMode } from '../../components/extract-workspace/types';
 
 export interface SummaryMetricCard {
   key: string;

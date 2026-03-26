@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { CFDIData, CFDIIngresoRow, CFDIPagoRow } from '../../cfdi/public';
+import type { ExtractGridController } from '../../components/extract-workspace/types';
 
 function downloadBlob(content: BlobPart, filename: string, type: string) {
   const blob = new Blob([content], { type });
@@ -20,11 +21,9 @@ export function useCfdiExports(params: {
   ingresoRows: CFDIIngresoRow[];
   pagoRows: CFDIPagoRow[];
   activeDatasetType: 'ingresos' | 'pagos';
-  visibleExtractColumns: Array<{ key: string; label: string }>;
-  sortedExtractRows: Array<Record<string, string>>;
-  getExtractCellValue: (row: Record<string, string>, key: string) => string;
+  extractGrid: ExtractGridController;
 }) {
-  const { cfdi, ingresoRows, pagoRows, activeDatasetType, visibleExtractColumns, sortedExtractRows, getExtractCellValue } = params;
+  const { cfdi, ingresoRows, pagoRows, activeDatasetType, extractGrid } = params;
   const [reportExported, setReportExported] = useState(false);
   const [taxesExported, setTaxesExported] = useState(false);
   const [ingresosExported, setIngresosExported] = useState(false);
@@ -181,13 +180,20 @@ ${cfdi.conceptos.map((c) => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.
 
   function exportCurrentTable() {
     try {
-      if (sortedExtractRows.length === 0 || visibleExtractColumns.length === 0) {
+      const visibleColumns = extractGrid.table.getVisibleLeafColumns();
+      const rowModel = extractGrid.selectedRowCount > 0
+        ? extractGrid.table.getSelectedRowModel()
+        : extractGrid.table.getSortedRowModel();
+
+      if (rowModel.rows.length === 0 || visibleColumns.length === 0) {
         throw new Error('Sin datos');
       }
 
-      const headers = visibleExtractColumns.map((column) => column.label);
-      const csvRows = sortedExtractRows.map((row) =>
-        visibleExtractColumns.map((column) => getExtractCellValue(row, column.key)).map((value) => escapeCsv(value)).join(','),
+      const headers = visibleColumns.map((column) => String(column.columnDef.header ?? column.id));
+      const csvRows = rowModel.rows.map((row) =>
+        visibleColumns
+          .map((column) => escapeCsv(String(row.getValue(column.id) ?? '')))
+          .join(','),
       );
 
       const csv = [headers.join(','), ...csvRows].join('\n');

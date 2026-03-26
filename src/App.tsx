@@ -8,12 +8,13 @@ import { CheckCircle2, ArrowLeft, Sparkles } from 'lucide-react';
 import type { CFDIData, CFDIConcept, CFDIIngresoRow, CFDIPagoRow } from './cfdi/public';
 import { useCfdiAnalysis } from './app/hooks/useCfdiAnalysis';
 import { useCfdiExports } from './app/hooks/useCfdiExports';
-import { useExtractGridState, type ExtractMode, type ExtractSortDirection } from './app/hooks/useExtractGridState';
+import { useExtractGridState } from './app/hooks/useExtractGridState';
 import { buildExtractMetrics, buildSummaryFields, getProfileLabel } from './app/view-models/cfdiViewModels';
 import { explainCfdiField } from './cfdi/domain/explainCfdiField';
 import CfdiSummaryHeader from './components/CfdiSummaryHeader';
 import ConceptDetailModal from './components/ConceptDetailModal';
 import ExtractWorkspace from './components/ExtractWorkspace';
+import type { ExtractMode, ExtractSortDirection } from './components/extract-workspace/types';
 import FindingsSidebar from './components/FindingsSidebar';
 import FileUpload from './components/FileUpload';
 import InspectorHeader from './components/InspectorHeader';
@@ -133,31 +134,10 @@ export default function App() {
   const activeDatasetType: ExtractMode = profile === 'pagos' ? 'pagos' : 'ingresos';
   const extractColumns = activeDatasetType === 'ingresos' ? INGRESO_COLUMNS : PAGO_COLUMNS;
   const {
+    extractGrid,
     extractSearchTerm,
-    setExtractSearchTerm,
-    extractColumnFilterKey,
-    setExtractColumnFilterKey,
-    extractPage,
-    setExtractPage,
-    extractPageSize,
-    setExtractPageSize,
-    extractSortKey,
-    setExtractSortKey,
-    extractSortDirection,
-    setExtractSortDirection,
-    activeHiddenColumns,
-    visibleExtractColumns,
     filteredExtractRows,
-    sortedExtractRows,
-    filteredExtractCount,
-    extractTotalPages,
-    safeExtractPage,
-    extractPageStart,
-    currentPageRows,
-    getExtractCellValue,
     resetForNewAnalysis,
-    resetGrid,
-    toggleColumn,
     resetAll: resetExtractState,
   } = useExtractGridState({
     activeDatasetType,
@@ -250,9 +230,7 @@ export default function App() {
     ingresoRows,
     pagoRows,
     activeDatasetType,
-    visibleExtractColumns: visibleExtractColumns.map((column) => ({ key: column.key, label: column.label })),
-    sortedExtractRows: sortedExtractRows as Record<string, string>[],
-    getExtractCellValue,
+    extractGrid,
   });
 
   if (!cfdi) {
@@ -336,44 +314,7 @@ export default function App() {
             <ExtractWorkspace
               embedded
               activeDatasetType={activeDatasetType}
-              extractColumns={extractColumns}
-              extractColumnFilterKey={extractColumnFilterKey}
-              extractSearchTerm={extractSearchTerm}
-              extractSortKey={extractSortKey}
-              extractSortDirection={extractSortDirection}
-              extractPageSize={extractPageSize}
-              activeHiddenColumns={activeHiddenColumns}
-              visibleExtractColumns={visibleExtractColumns}
-              filteredExtractCount={filteredExtractCount}
-              safeExtractPage={safeExtractPage}
-              extractTotalPages={extractTotalPages}
-              extractPageStart={extractPageStart}
-              currentPageRows={currentPageRows as Record<string, string>[]}
-              getExtractCellValue={getExtractCellValue}
-              onColumnFilterChange={(value) => {
-                setExtractColumnFilterKey(value);
-                setExtractPage(1);
-              }}
-              onSearchChange={(value) => {
-                setExtractSearchTerm(value);
-                setExtractPage(1);
-              }}
-              onSortKeyChange={(value) => {
-                setExtractSortKey(value);
-                setExtractPage(1);
-              }}
-              onSortDirectionToggle={() => {
-                setExtractSortDirection((current) => current === 'asc' ? 'desc' : 'asc');
-                setExtractPage(1);
-              }}
-              onPageSizeChange={(value) => {
-                setExtractPageSize(value);
-                setExtractPage(1);
-              }}
-              onResetGrid={resetGrid}
-              onToggleColumn={toggleColumn}
-              onPrevPage={() => setExtractPage((current) => Math.max(1, current - 1))}
-              onNextPage={() => setExtractPage((current) => Math.min(extractTotalPages, current + 1))}
+              grid={extractGrid}
             />
           </div>
 
