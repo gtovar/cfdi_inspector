@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { enrichCfdiWithMathDiagnosis } from './cfdi-domain-adapter';
+
 export interface CFDIConcept {
   descripcion: string;
   cantidad: number;
@@ -245,31 +247,9 @@ export function parseCFDI(xmlString: string): CFDIData {
     }
   }
 
-  // Validaciones Finales
-  if (Math.abs(data.subtotalCalculado - data.subtotal) !== 0) {
-    const summary = `XML declara ${data.subtotal.toFixed(2)} y la suma de conceptos da ${data.subtotalCalculado.toFixed(2)}.`;
-    data.hallazgos.push(`Discrepancia en Subtotal: ${summary}`);
-    data.findings.push({
-      id: 'subtotal',
-      severity: 'critical',
-      title: 'Discrepancia en subtotal',
-      summary,
-    });
-  }
-
   const sumaTraslados = data.impuestosGlobales.reduce((acc, curr) => acc + curr.importe, 0);
   data.totalCalculado = data.subtotal - data.descuento + sumaTraslados;
-
-  if (Math.abs(data.totalCalculado - data.total) !== 0) {
-    const summary = `XML declara ${data.total.toFixed(2)} y el cálculo manual da ${data.totalCalculado.toFixed(2)}.`;
-    data.hallazgos.push(`Discrepancia en Total: ${summary}`);
-    data.findings.push({
-      id: 'total',
-      severity: 'critical',
-      title: 'Discrepancia en total',
-      summary,
-    });
-  }
+  enrichCfdiWithMathDiagnosis(data);
 
   const conceptWarnings = data.conceptos
     .map((concepto, index) => ({ concepto, index }))
@@ -287,27 +267,6 @@ export function parseCFDI(xmlString: string): CFDIData {
     });
     if (!data.impactedConceptIndexes.includes(index)) {
       data.impactedConceptIndexes.push(index);
-    }
-  });
-
-  const taxWarnings = data.conceptos
-    .flatMap((concepto, conceptIndex) =>
-      concepto.impuestos.map((impuesto, taxIndex) => ({ concepto, impuesto, conceptIndex, taxIndex }))
-    )
-    .filter(({ impuesto }) => impuesto.diferencia !== 0)
-    .sort((a, b) => b.impuesto.diferencia - a.impuesto.diferencia)
-    .slice(0, 3);
-
-  taxWarnings.forEach(({ concepto, impuesto, conceptIndex, taxIndex }) => {
-    const summary = `${concepto.descripcion}: traslado ${impuesto.impuesto} ${summarizeDifference(impuesto.importe, impuesto.importeCalculado)}`;
-    data.findings.push({
-      id: `tax-${conceptIndex}-${taxIndex}`,
-      severity: impuesto.diferencia > 0.01 ? 'critical' : 'warning',
-      title: `Traslado inconsistente en concepto ${conceptIndex + 1}`,
-      summary,
-    });
-    if (!data.impactedConceptIndexes.includes(conceptIndex)) {
-      data.impactedConceptIndexes.push(conceptIndex);
     }
   });
 

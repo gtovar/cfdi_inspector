@@ -20,6 +20,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { CFDIData, CFDIConcept, CFDIProfile, CFDIIngresoRow, CFDIPagoRow } from './lib/cfdi';
 import { analyzeCFDIWithWorker } from './lib/cfdi-worker-client';
+import { explainCfdiField } from './cfdi/domain/explainCfdiField';
 import FileUpload from './components/FileUpload';
 
 function formatExact(value: number) {
@@ -38,6 +39,7 @@ interface SummaryFieldCard {
   label: string;
   value: string;
   icon: LucideIcon;
+  meaning?: string;
 }
 
 interface SummaryMetricCard {
@@ -126,6 +128,17 @@ function getProfileRecommendation(profile: CFDIProfile) {
     default:
       return 'Sugerido: revisar el XML antes de extraer';
   }
+}
+
+function getExplainedMeaning(key: string, value: string | number | null) {
+  return explainCfdiField(key, value).meaning;
+}
+
+function getExplainedTaxLabel(code: string) {
+  const explained = explainCfdiField('impuesto', code);
+  return explained.meaning.includes('sin catalogo')
+    ? code
+    : `${code} · ${explained.meaning.split('.')[0]}`;
 }
 
 export default function App() {
@@ -598,39 +611,42 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
 
   const summaryFieldBuilders: Record<CFDIProfile, () => SummaryFieldCard[]> = {
     ingreso: () => (cfdi ? [
-      { key: 'emisor', label: 'Emisor', value: cfdi.emisor || '-', icon: User },
-      { key: 'uuid', label: 'UUID', value: cfdi.uuid || '-', icon: FileText },
-      { key: 'receptor', label: 'Receptor', value: cfdi.receptor || '-', icon: Database },
+      { key: 'emisor', label: 'Emisor', value: cfdi.emisor || '-', icon: User, meaning: 'Nombre o RFC del emisor detectado en el CFDI.' },
+      { key: 'uuid', label: 'UUID', value: cfdi.uuid || '-', icon: FileText, meaning: 'Identificador fiscal único del comprobante timbrado.' },
+      { key: 'receptor', label: 'Receptor', value: cfdi.receptor || '-', icon: Database, meaning: 'Nombre o RFC del receptor detectado en el CFDI.' },
       {
         key: 'fecha',
         label: 'Fecha timbrado',
         value: cfdi.fecha ? new Date(cfdi.fecha).toLocaleString() : '-',
         icon: Calendar,
+        meaning: 'Fecha detectada del comprobante para esta lectura operativa.',
       },
     ] : []),
     pagos: () => {
       const firstPago = pagoRows[0];
       return [
-        { key: 'emisor', label: 'Emisor', value: cfdi?.emisor || firstPago?.rfcEmisor || '-', icon: User },
-        { key: 'uuid', label: 'UUID', value: cfdi?.uuid || firstPago?.uuidCFDI || '-', icon: FileText },
-        { key: 'receptor', label: 'Receptor', value: cfdi?.receptor || firstPago?.rfcReceptor || '-', icon: Database },
+        { key: 'emisor', label: 'Emisor', value: cfdi?.emisor || firstPago?.rfcEmisor || '-', icon: User, meaning: 'Nombre o RFC del emisor detectado en el CFDI.' },
+        { key: 'uuid', label: 'UUID', value: cfdi?.uuid || firstPago?.uuidCFDI || '-', icon: FileText, meaning: 'Identificador fiscal único del comprobante timbrado.' },
+        { key: 'receptor', label: 'Receptor', value: cfdi?.receptor || firstPago?.rfcReceptor || '-', icon: Database, meaning: 'Nombre o RFC del receptor detectado en el CFDI.' },
         {
           key: 'fecha',
           label: 'Fecha CFDI',
           value: firstPago?.fechaCFDI ? new Date(firstPago.fechaCFDI).toLocaleString() : (cfdi?.fecha ? new Date(cfdi.fecha).toLocaleString() : '-'),
           icon: Calendar,
+          meaning: 'Fecha detectada del comprobante para esta lectura operativa.',
         },
       ];
     },
     unknown: () => (cfdi ? [
-      { key: 'emisor', label: 'Emisor', value: cfdi.emisor || '-', icon: User },
-      { key: 'uuid', label: 'UUID', value: cfdi.uuid || '-', icon: FileText },
-      { key: 'receptor', label: 'Receptor', value: cfdi.receptor || '-', icon: Database },
+      { key: 'emisor', label: 'Emisor', value: cfdi.emisor || '-', icon: User, meaning: 'Nombre o RFC del emisor detectado en el CFDI.' },
+      { key: 'uuid', label: 'UUID', value: cfdi.uuid || '-', icon: FileText, meaning: 'Identificador fiscal único del comprobante timbrado.' },
+      { key: 'receptor', label: 'Receptor', value: cfdi.receptor || '-', icon: Database, meaning: 'Nombre o RFC del receptor detectado en el CFDI.' },
       {
         key: 'fecha',
         label: 'Fecha detectada',
         value: cfdi.fecha ? new Date(cfdi.fecha).toLocaleString() : '-',
         icon: Calendar,
+        meaning: 'Fecha detectada del comprobante para esta lectura operativa.',
       },
     ] : []),
   };
@@ -1096,6 +1112,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                 <div
                   key={field.key}
                   className={`p-4 flex items-start gap-3 ${index < summaryFields.length - 1 ? 'border-r border-[#141414]' : ''}`}
+                  title={field.meaning}
                 >
                   <Icon size={16} className="opacity-50 mt-1" />
                   <div>
@@ -1143,9 +1160,24 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                 <tbody className="divide-y divide-[#141414]/10">
                   {cfdi.taxAuditGroups.map((group) => (
                     <tr key={group.key}>
-                      <td className="px-3 py-2 text-[10px] font-mono">{group.impuesto}</td>
-                      <td className="px-3 py-2 text-[10px]">{group.tipoFactor}</td>
-                      <td className="px-3 py-2 text-[10px] font-mono text-right">{(group.tasaOCuota * 100).toFixed(2)}%</td>
+                      <td
+                        className="px-3 py-2 text-[10px] font-mono"
+                        title={getExplainedMeaning('impuesto', group.impuesto)}
+                      >
+                        {getExplainedTaxLabel(group.impuesto)}
+                      </td>
+                      <td
+                        className="px-3 py-2 text-[10px]"
+                        title={getExplainedMeaning('tipoFactor', group.tipoFactor)}
+                      >
+                        {group.tipoFactor}
+                      </td>
+                      <td
+                        className="px-3 py-2 text-[10px] font-mono text-right"
+                        title={getExplainedMeaning('tasaOCuota', group.tasaOCuota)}
+                      >
+                        {(group.tasaOCuota * 100).toFixed(2)}%
+                      </td>
                       <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeDetalle.toFixed(2)}</td>
                       <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeAgrupado.toFixed(2)}</td>
                       <td className={`px-3 py-2 text-[10px] font-mono text-right ${Math.abs(group.diferencia) !== 0 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
@@ -1226,16 +1258,29 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                         {selectedConcept.impuestos.map((imp, idx) => (
                           <div key={idx} className="p-4 border border-[#141414]/20 rounded bg-white/30">
                             <div className="flex justify-between mb-2">
-                              <span className="text-[10px] font-mono font-bold uppercase">{imp.impuesto} ({imp.tipoFactor})</span>
-                              <span className="text-[10px] font-mono">Tasa: {(imp.tasaOCuota * 100).toFixed(2)}%</span>
+                              <span
+                                className="text-[10px] font-mono font-bold uppercase"
+                                title={`${getExplainedMeaning('impuesto', imp.impuesto)} ${getExplainedMeaning('tipoFactor', imp.tipoFactor)}`}
+                              >
+                                {getExplainedTaxLabel(imp.impuesto)} ({imp.tipoFactor})
+                              </span>
+                              <span
+                                className="text-[10px] font-mono"
+                                title={getExplainedMeaning('tasaOCuota', imp.tasaOCuota)}
+                              >
+                                Tasa: {(imp.tasaOCuota * 100).toFixed(2)}%
+                              </span>
                             </div>
+                            <p className="text-[10px] font-mono opacity-55 mb-3">
+                              {getExplainedMeaning('tipoFactor', imp.tipoFactor)}
+                            </p>
                             <div className="space-y-1 text-[10px] font-mono opacity-70">
                               <div className="flex justify-between">
-                                <span>Base:</span>
+                                <span title={getExplainedMeaning('base', imp.base)}>Base:</span>
                                 <span>${imp.base.toFixed(6)}</span>
                               </div>
                               <div className="flex justify-between">
-                                <span>Importe XML:</span>
+                                <span title={getExplainedMeaning('importe', imp.importe)}>Importe XML:</span>
                                 <span>${imp.importe.toFixed(6)}</span>
                               </div>
                               <div className="flex justify-between italic">
