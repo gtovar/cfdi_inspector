@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CFDIData } from '../../lib/cfdi';
+import type { CFDIData } from './cfdiTypes';
 import { enrichCfdiWithMathDiagnosis, toCanonicalCfdi } from './cfdiAnalysisAdapter';
 
 function createBaseCfdiData(overrides: Partial<CFDIData> = {}): CFDIData {

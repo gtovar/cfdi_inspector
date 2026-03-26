@@ -5,13 +5,7 @@ import {
   extractIngresoRowsData,
   extractPagoRowsData,
 } from '../cfdi/application/cfdiExtractionService';
-import type {
-  CFDIAnalysisBundle,
-  CFDIData,
-  CFDIIngresoRow,
-  CFDIPagoRow,
-  CFDIProfile,
-} from './cfdi';
+import type { CFDIAnalysisBundle, CFDIData, CFDIIngresoRow, CFDIPagoRow, CFDIProfile } from '../cfdi/application/cfdiTypes';
 
 type XmlNode = Record<string, unknown>;
 type WorkerProgressReporter = (progress: number, detail: string) => void;

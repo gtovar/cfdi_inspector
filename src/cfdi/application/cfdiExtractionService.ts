@@ -1,6 +1,6 @@
 import { XMLParser } from 'fast-xml-parser';
 import { buildCfdiData, detectCfdiProfile } from './cfdiAnalysisService';
-import type { CFDIAnalysisBundle, CFDIIngresoRow, CFDIPagoRow } from '../../lib/cfdi';
+import type { CFDIAnalysisBundle, CFDIIngresoRow, CFDIPagoRow } from './cfdiTypes';
 
 type XmlNode = Record<string, unknown>;
 type ProgressReporter = (progress: number, detail: string) => void;

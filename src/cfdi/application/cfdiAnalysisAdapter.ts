@@ -1,6 +1,6 @@
 import type { CanonicalCfdi, CanonicalConcept, CanonicalTaxLine } from '../domain/canonicalCfdi';
 import { diagnoseCfdiMath, roundCurrency, sumSafe, type MathFinding } from '../domain/diagnoseCfdiMath';
-import type { AuditFinding, CFDIConcept, CFDIData, CFDIImpuesto } from '../../lib/cfdi';
+import type { AuditFinding, CFDIConcept, CFDIData, CFDIImpuesto } from './cfdiTypes';
 
 function toCanonicalTaxLine(impuesto: CFDIImpuesto): CanonicalTaxLine {
   return {

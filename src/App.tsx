@@ -18,7 +18,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { CFDIData, CFDIConcept, CFDIProfile, CFDIIngresoRow, CFDIPagoRow } from './lib/cfdi';
+import type { CFDIData, CFDIConcept, CFDIProfile, CFDIIngresoRow, CFDIPagoRow } from './cfdi/application/cfdiTypes';
 import { analyzeCFDIWithWorker } from './lib/cfdi-worker-client';
 import { explainCfdiField } from './cfdi/domain/explainCfdiField';
 import FileUpload from './components/FileUpload';

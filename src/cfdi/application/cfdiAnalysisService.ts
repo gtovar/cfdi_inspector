@@ -5,7 +5,7 @@ import {
   enrichCfdiWithMathDiagnosis,
 } from './cfdiAnalysisAdapter';
 import { normalizeCfdi } from '../domain/normalizeCfdi';
-import type { AuditFinding, CFDIConcept, CFDIData, CFDIProfile, TaxAuditGroup } from '../../lib/cfdi';
+import type { AuditFinding, CFDIConcept, CFDIData, CFDIProfile, TaxAuditGroup } from './cfdiTypes';
 
 type XmlNode = Record<string, unknown>;
 

@@ -1,4 +1,5 @@
-import { analyzeCFDI, CFDIAnalysisBundle } from './cfdi';
+import type { CFDIAnalysisBundle } from '../cfdi/application/cfdiTypes';
+import { analyzeCFDI } from './cfdi';
 
 export interface CFDIWorkerResponse {
   bundle: CFDIAnalysisBundle;
