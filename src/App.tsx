@@ -129,7 +129,6 @@ function getProfileRecommendation(profile: CFDIProfile) {
 }
 
 export default function App() {
-  const [extractMode, setExtractMode] = useState<ExtractMode>('ingresos');
   const [profile, setProfile] = useState<CFDIProfile>('unknown');
   const [cfdi, setCfdi] = useState<CFDIData | null>(null);
   const [ingresoRows, setIngresoRows] = useState<CFDIIngresoRow[]>([]);
@@ -164,6 +163,7 @@ export default function App() {
   const [diagnosePageSize, setDiagnosePageSize] = useState(100);
   const [diagnoseSortKey, setDiagnoseSortKey] = useState<string>('diferencia');
   const [diagnoseSortDirection, setDiagnoseSortDirection] = useState<ExtractSortDirection>('desc');
+  const [taxAuditExpanded, setTaxAuditExpanded] = useState(true);
 
   const handleFileSelect = async (xml: string) => {
     try {
@@ -195,12 +195,10 @@ export default function App() {
       setDiagnosePageSize(100);
       setDiagnoseSortKey('diferencia');
       setDiagnoseSortDirection('desc');
+      setTaxAuditExpanded(true);
+      setHiddenIngresoColumns([]);
+      setHiddenPagoColumns([]);
       setHiddenDiagnoseColumns([]);
-      if (bundle.profile === 'pagos') {
-        setExtractMode('pagos');
-      } else {
-        setExtractMode('ingresos');
-      }
     } catch (error) {
       console.error("Error parsing CFDI:", error);
       alert("Error al procesar el XML. Asegúrate de que sea un CFDI válido.");
@@ -458,10 +456,9 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
         throw new Error('Sin datos');
       }
 
-      const escapeCsv = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
       const headers = visibleExtractColumns.map((column) => column.label);
       const csvRows = sortedExtractRows.map((row) =>
-        visibleExtractColumns.map((column) => getExtractCellValue(row as Record<string, string>, column.key)).map(escapeCsv).join(',')
+        visibleExtractColumns.map((column) => getExtractCellValue(row as Record<string, string>, column.key)).map((value) => `"${String(value).replaceAll('"', '""')}"`).join(',')
       );
 
       const csv = [headers.join(','), ...csvRows].join('\n');
@@ -469,7 +466,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Tabla_${extractMode}_${cfdi?.uuid?.substring(0, 8) || 'cfdi'}.csv`;
+      a.download = `Tabla_${activeDatasetType}_${cfdi?.uuid?.substring(0, 8) || 'cfdi'}.csv`;
       a.click();
       URL.revokeObjectURL(url);
       setTableExportError(false);
@@ -486,9 +483,10 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     ? (onlyImpacted ? cfdi.impactedConceptIndexes.map((index) => cfdi.conceptos[index]).filter(Boolean) : cfdi.conceptos)
     : [];
 
-  const activeExtractBaseRows = extractMode === 'ingresos' ? ingresoRows : pagoRows;
-  const extractColumns = extractMode === 'ingresos' ? INGRESO_COLUMNS : PAGO_COLUMNS;
-  const activeHiddenColumns = extractMode === 'ingresos' ? hiddenIngresoColumns : hiddenPagoColumns;
+  const activeDatasetType: ExtractMode = profile === 'pagos' ? 'pagos' : 'ingresos';
+  const activeExtractBaseRows = activeDatasetType === 'ingresos' ? ingresoRows : pagoRows;
+  const extractColumns = activeDatasetType === 'ingresos' ? INGRESO_COLUMNS : PAGO_COLUMNS;
+  const activeHiddenColumns = activeDatasetType === 'ingresos' ? hiddenIngresoColumns : hiddenPagoColumns;
   const visibleExtractColumns = extractColumns.filter((column) => !activeHiddenColumns.includes(column.key));
   const visibleDiagnoseColumns = DIAGNOSE_COLUMNS.filter((column) => !hiddenDiagnoseColumns.includes(column.key));
   const filteredExtractRows = activeExtractBaseRows.filter((row) => {
@@ -501,8 +499,8 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
 
     return getExtractCellValue(row as Record<string, string>, extractColumnFilterKey).toLowerCase().includes(search);
   });
-  const filteredIngresoRows = extractMode === 'ingresos' ? filteredExtractRows as CFDIIngresoRow[] : ingresoRows;
-  const filteredPagoRows = extractMode === 'pagos' ? filteredExtractRows as CFDIPagoRow[] : pagoRows;
+  const filteredIngresoRows = activeDatasetType === 'ingresos' ? filteredExtractRows as CFDIIngresoRow[] : ingresoRows;
+  const filteredPagoRows = activeDatasetType === 'pagos' ? filteredExtractRows as CFDIPagoRow[] : pagoRows;
   const conceptosDetectados = new Set(
     ingresoRows.map((row) => `${row.uuid}|${row.claveProdServ}|${row.descripcion}|${row.importe}`)
   ).size;
@@ -601,6 +599,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
   const summaryFieldBuilders: Record<CFDIProfile, () => SummaryFieldCard[]> = {
     ingreso: () => (cfdi ? [
       { key: 'emisor', label: 'Emisor', value: cfdi.emisor || '-', icon: User },
+      { key: 'uuid', label: 'UUID', value: cfdi.uuid || '-', icon: FileText },
       { key: 'receptor', label: 'Receptor', value: cfdi.receptor || '-', icon: Database },
       {
         key: 'fecha',
@@ -613,6 +612,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
       const firstPago = pagoRows[0];
       return [
         { key: 'emisor', label: 'Emisor', value: cfdi?.emisor || firstPago?.rfcEmisor || '-', icon: User },
+        { key: 'uuid', label: 'UUID', value: cfdi?.uuid || firstPago?.uuidCFDI || '-', icon: FileText },
         { key: 'receptor', label: 'Receptor', value: cfdi?.receptor || firstPago?.rfcReceptor || '-', icon: Database },
         {
           key: 'fecha',
@@ -624,6 +624,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     },
     unknown: () => (cfdi ? [
       { key: 'emisor', label: 'Emisor', value: cfdi.emisor || '-', icon: User },
+      { key: 'uuid', label: 'UUID', value: cfdi.uuid || '-', icon: FileText },
       { key: 'receptor', label: 'Receptor', value: cfdi.receptor || '-', icon: Database },
       {
         key: 'fecha',
@@ -650,7 +651,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
   };
 
   const summaryFields = summaryFieldBuilders[profile]?.() ?? [];
-  const activeExtractMetrics = extractMetricBuilders[extractMode]();
+  const activeExtractMetrics = extractMetricBuilders[activeDatasetType]();
 
   useEffect(() => {
     if (extractPage > extractTotalPages) {
@@ -665,35 +666,21 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
   }, [diagnosePage, diagnoseTotalPages]);
 
   const renderExtractWorkspace = (embedded = false) => (
-    <section className={embedded ? 'h-[42vh] border-t border-[#141414] bg-white/10 flex flex-col' : 'flex-1 flex flex-col overflow-hidden relative'}>
-      {embedded ? (
-        <div className="px-4 py-3 border-b border-[#141414] bg-[#141414]/[0.03]">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Tabla Operativa</p>
-              <p className="text-[11px] font-mono opacity-60 mt-1">
-                Una sola salida de trabajo: discrepancias arriba, filas operativas abajo y exportación directa a CSV.
-              </p>
-            </div>
-            <span className="px-2 py-1 text-[10px] font-mono uppercase tracking-widest bg-[#141414] text-[#E4E3E0]">
-              Ingresos
-            </span>
-          </div>
-        </div>
-      ) : (
+    <section className={embedded ? 'flex-1 min-h-0 border-t border-[#141414] bg-white/10 flex flex-col' : 'flex-1 flex flex-col overflow-hidden relative'}>
+      {embedded ? null : (
         <div className="grid grid-cols-3 border-b border-[#141414]">
           <div className="p-4 border-r border-[#141414]">
             <p className="text-[10px] font-mono uppercase opacity-50">
-              {extractMode === 'ingresos' ? 'Unidad de lectura' : 'Unidad de extracción'}
+              {activeDatasetType === 'ingresos' ? 'Unidad de lectura' : 'Unidad de extracción'}
             </p>
             <p className="text-xs font-bold mt-1">
-              {extractMode === 'ingresos' ? 'Una fila por concepto e impuesto' : 'Una fila por documento relacionado e impuesto DR'}
+              {activeDatasetType === 'ingresos' ? 'Una fila por concepto e impuesto' : 'Una fila por documento relacionado e impuesto DR'}
             </p>
           </div>
           <div className="p-4 border-r border-[#141414]">
             <p className="text-[10px] font-mono uppercase opacity-50">Origen</p>
             <p className="text-xs font-bold mt-1">
-              {extractMode === 'ingresos' ? 'Conceptos / Traslados / Retenciones' : 'Pago / DoctoRelacionado / DR'}
+              {activeDatasetType === 'ingresos' ? 'Conceptos / Traslados / Retenciones' : 'Pago / DoctoRelacionado / DR'}
             </p>
           </div>
           <div className="p-4">
@@ -702,18 +689,6 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
           </div>
         </div>
       )}
-
-      <div className="grid grid-cols-4 border-b border-[#141414] bg-[#141414]/[0.03]">
-        {activeExtractMetrics.map((metric, index) => (
-          <div
-            key={metric.key}
-            className={`p-3 ${index < activeExtractMetrics.length - 1 ? 'border-r border-[#141414]/10' : ''}`}
-          >
-            <p className="text-[10px] font-mono uppercase opacity-50">{metric.label}</p>
-            <p className="text-lg font-serif italic mt-1">{metric.value}</p>
-          </div>
-        ))}
-      </div>
 
       <div className="p-4 border-b border-[#141414] flex items-center justify-between bg-white/50">
         <div className="flex items-center gap-3">
@@ -799,9 +774,9 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
               setExtractColumnFilterKey('all');
               setExtractPage(1);
               setExtractPageSize(100);
-              setExtractSortKey(extractMode === 'pagos' ? 'fechaPago' : 'descripcion');
+              setExtractSortKey(activeDatasetType === 'pagos' ? 'fechaPago' : 'descripcion');
               setExtractSortDirection('asc');
-              if (extractMode === 'ingresos') {
+              if (activeDatasetType === 'ingresos') {
                 setHiddenIngresoColumns([]);
               } else {
                 setHiddenPagoColumns([]);
@@ -823,7 +798,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
               <button
                 key={column.key}
                 onClick={() => {
-                  if (extractMode === 'ingresos') {
+                  if (activeDatasetType === 'ingresos') {
                     setHiddenIngresoColumns((current) =>
                       hidden ? current.filter((key) => key !== column.key) : [...current, column.key]
                     );
@@ -847,7 +822,11 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
       </div>
 
       <div className="flex-1 overflow-auto">
-        {filteredExtractCount > 0 ? (
+        {visibleExtractColumns.length === 0 ? (
+          <div className="p-16 text-center text-xs font-mono opacity-45">
+            Todas las columnas estan ocultas. Usa los toggles de columnas o `Reset grid`.
+          </div>
+        ) : filteredExtractCount > 0 ? (
           <table className="w-full border-collapse">
             <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]/10">
               <tr className="text-left text-[10px] font-mono uppercase opacity-50">
@@ -861,7 +840,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
             <tbody>
               {currentPageRows.map((row, index) => (
                 <tr
-                  key={`${extractMode}-${extractPageStart + index}`}
+                  key={`${activeDatasetType}-${extractPageStart + index}`}
                   className="border-b border-[#141414]/10 hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
                 >
                   {visibleExtractColumns.map((column) => (
@@ -880,13 +859,13 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
           </table>
         ) : (
           <div className="p-16 text-center text-xs font-mono opacity-45">
-            {extractMode === 'ingresos'
+            {activeDatasetType === 'ingresos'
               ? 'No hay registros de ingresos para mostrar con el filtro actual.'
               : 'No hay registros de pagos para mostrar con el filtro actual.'}
           </div>
         )}
       </div>
-      <div className="p-4 border-t border-[#141414] bg-white/95 backdrop-blur-sm flex items-center justify-between sticky bottom-0">
+      <div className="p-4 border-t border-[#141414] bg-white/95 backdrop-blur-sm flex items-center justify-between shrink-0">
         <div className="flex flex-col">
           <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">
             Pagina {safeExtractPage} de {extractTotalPages}
@@ -917,91 +896,6 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     </section>
   );
 
-  const renderExtractView = () => (
-    <main className="flex-1 min-h-0 flex overflow-hidden">
-      <aside className="w-80 min-h-0 border-r border-[#141414] flex flex-col bg-[#E4E3E0]">
-        <div className="p-4 border-b border-[#141414]">
-          <p className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-2">Extracción Operativa</p>
-          <div className="border border-[#141414] bg-white/50 p-4">
-            <p className="text-xl font-serif italic">{extractMode === 'ingresos' ? 'Ingresos' : 'Pagos'}</p>
-            <p className="text-[11px] font-mono leading-relaxed mt-3 opacity-75">
-              {extractMode === 'ingresos'
-                ? 'Lectura tabular por concepto e impuesto, pensada para explotación masiva y exportación CSV.'
-                : 'Lectura tabular por pago, documento relacionado e impuestos DR, pensada para explotación masiva y exportación CSV.'}
-            </p>
-            <div className="mt-3 flex items-center gap-2">
-              <span className="inline-flex items-center gap-2 px-2 py-1 text-[10px] font-mono uppercase tracking-widest bg-[#141414] text-[#E4E3E0]">
-                <Sparkles size={11} />
-                Perfil detectado: {getProfileLabel(profile)}
-              </span>
-            </div>
-            <p className="text-[10px] font-mono uppercase tracking-widest opacity-50 mt-3">
-              {getProfileRecommendation(profile)}
-            </p>
-          </div>
-        </div>
-
-        <div className="p-4 border-b border-[#141414] flex items-center justify-between">
-          <h2 className="text-xs font-mono uppercase tracking-widest opacity-50">Modo</h2>
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-[#141414] text-[#E4E3E0]">
-            CSV
-          </span>
-        </div>
-
-        <div className="p-4 space-y-3">
-          <button
-            onClick={() => {
-              setExtractMode('ingresos');
-              setExtractPage(1);
-              setExtractColumnFilterKey('all');
-              setExtractSortKey('descripcion');
-              setExtractSortDirection('asc');
-            }}
-            className={`w-full text-left px-3 py-3 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
-              extractMode === 'ingresos'
-                ? 'bg-[#141414] text-[#E4E3E0] border-[#141414]'
-                : 'border-[#141414]/20 bg-white/35 hover:border-[#141414]'
-            }`}
-          >
-            Ingresos
-          </button>
-          <button
-            onClick={() => {
-              setExtractMode('pagos');
-              setExtractPage(1);
-              setExtractColumnFilterKey('all');
-              setExtractSortKey('fechaPago');
-              setExtractSortDirection('asc');
-            }}
-            className={`w-full text-left px-3 py-3 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
-              extractMode === 'pagos'
-                ? 'bg-[#141414] text-[#E4E3E0] border-[#141414]'
-                : 'border-[#141414]/20 bg-white/35 hover:border-[#141414]'
-            }`}
-          >
-            Pagos
-          </button>
-        </div>
-
-        <div className="mt-auto p-4 border-t border-[#141414] bg-[#141414]/5">
-          <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-3">Salida</h3>
-          <div className="space-y-2 text-[11px] font-mono">
-            <div className="flex justify-between">
-              <span>Tipo</span>
-              <span>{extractMode === 'ingresos' ? 'Concepto + impuesto' : 'DoctoRel + impuesto DR'}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Formato</span>
-              <span>CSV</span>
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      {renderExtractWorkspace()}
-    </main>
-  );
-
   if (!cfdi) {
     return (
       <div className="min-h-screen bg-[#E4E3E0] flex items-center justify-center p-6">
@@ -1027,7 +921,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     <div className="h-screen bg-[#E4E3E0] text-[#141414] font-sans flex flex-col">
       {/* Header */}
       <header className="border-b border-[#141414] sticky top-0 bg-[#E4E3E0] z-10">
-        <div className="px-4 py-3 flex items-start justify-between gap-6">
+        <div className="px-4 py-2.5 flex items-center justify-between gap-6">
         <div className="flex items-start gap-4 min-w-0">
           <button 
             onClick={() => {
@@ -1041,37 +935,41 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
               setAnalysisStageLabel('Analizando estructura CFDI');
               setAnalysisStageProgress(100);
               setAnalysisStageDetail('');
-              setExtractMode('ingresos');
               setExtractSearchTerm('');
+              setExtractColumnFilterKey('all');
               setDiagnoseSearchTerm('');
+              setDiagnoseColumnFilterKey('all');
+              setExtractPage(1);
+              setExtractPageSize(100);
+              setExtractSortKey('descripcion');
+              setExtractSortDirection('asc');
+              setHiddenIngresoColumns([]);
+              setHiddenPagoColumns([]);
               setDiagnosePage(1);
               setDiagnosePageSize(100);
               setDiagnoseSortKey('diferencia');
               setDiagnoseSortDirection('desc');
+              setTaxAuditExpanded(true);
               setHiddenDiagnoseColumns([]);
             }}
-            className="w-10 h-10 mt-0.5 shrink-0 border border-[#141414] bg-[#E4E3E0] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors rounded-full flex items-center justify-center"
+            className="w-9 h-9 shrink-0 border border-[#141414] bg-[#E4E3E0] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors rounded-full flex items-center justify-center"
           >
-            <ArrowLeft size={20} />
+            <ArrowLeft size={18} />
           </button>
-          <div className="flex items-start gap-8 min-w-0">
-            <div className="mt-1 flex items-baseline gap-3 min-w-0">
-              <div className="flex flex-col min-w-0">
-                <div className="mt-1 flex items-baseline gap-3 min-w-0">
-                  <h1 className="text-[28px] leading-none font-serif italic whitespace-nowrap">CFDI Inspector</h1>
-                </div>
-                <div className="mt-3 flex items-center gap-4 min-w-0">
-                  <p className="text-[10px] font-mono opacity-45 uppercase tracking-[0.18em]">v1.0.0 // Internal Tool</p>
-                </div>
-              </div>
-            </div>
+          <div className="flex items-start gap-6 min-w-0">
             <div className="flex flex-col min-w-0">
-              <div className="mt-1 flex items-baseline gap-3 min-w-0">
-                <h2 className="text-[18px] leading-none font-serif italic text-[#141414]/70 truncate">{getProfileLabel(profile)}</h2>
+              <div className="flex items-baseline gap-4 min-w-0">
+                <h1 className="text-[26px] leading-none font-serif italic whitespace-nowrap">CFDI Inspector</h1>
+                <div className="h-px w-8 bg-[#141414]/20 mt-1 shrink-0" />
+                <h2 className="text-[17px] leading-none font-serif italic text-[#141414]/70 truncate">
+                  {getProfileLabel(profile)}
+                </h2>
               </div>
-              <p className="mt-3 text-[10px] font-mono opacity-55 uppercase tracking-[0.14em] truncate">
-                {cfdi.uuid ? `UUID ${cfdi.uuid}` : 'UUID no detectado'}
-              </p>
+              <div className="mt-2 flex items-center gap-3 min-w-0">
+                <p className="text-[10px] font-mono opacity-45 uppercase tracking-[0.18em]">v1.0.0</p>
+                <span className="text-[#141414]/20">/</span>
+                <p className="text-[10px] font-mono opacity-45 uppercase tracking-[0.18em]">Internal Tool</p>
+              </div>
             </div>
           </div>
         </div>
@@ -1079,7 +977,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
         <div className="flex items-center gap-3 shrink-0">
           <button 
             onClick={exportCurrentTable}
-            className={`px-5 py-3 text-[10px] font-mono uppercase tracking-[0.22em] transition-opacity flex items-center gap-2 ${
+            className={`px-4 py-2.5 text-[10px] font-mono uppercase tracking-[0.22em] transition-opacity flex items-center gap-2 ${
               tableExported
                 ? 'bg-green-700 text-[#E4E3E0]'
                 : tableExportError
@@ -1094,89 +992,104 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
         </div>
       </header>
 
-      {profile === 'pagos' ? renderExtractView() : (
       <main className="flex-1 min-h-0 flex overflow-hidden">
-        {/* Sidebar Hallazgos */}
         <aside className="w-80 min-h-0 border-r border-[#141414] flex flex-col bg-[#E4E3E0]">
-          <div className="p-4 border-b border-[#141414] flex items-center justify-between">
-            <h2 className="text-xs font-mono uppercase tracking-widest opacity-50">Hallazgos</h2>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${cfdi.findings.length > 0 ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-              {cfdi.findings.length} Alertas
-            </span>
+          <div className="p-4 border-b border-[#141414]">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className={`w-2 h-2 rounded-full shrink-0 ${cfdi.findings.length > 0 ? 'bg-red-600' : 'bg-green-600'}`} />
+                <p className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-60">Hallazgos encontrados</p>
+              </div>
+              <span
+                className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-mono ${
+                  cfdi.findings.length > 0
+                    ? 'bg-red-100 text-red-600'
+                    : 'bg-green-100 text-green-700'
+                }`}
+              >
+                {cfdi.findings.length === 0 ? '0 alertas' : `${cfdi.findings.length} alertas`}
+              </span>
+            </div>
           </div>
-          
+
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {cfdi.findings.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full opacity-30 text-center">
-                <CheckCircle2 size={48} className="mb-4" />
-                <p className="text-xs font-mono uppercase tracking-widest">Sin discrepancias detectadas</p>
-              </div>
+              <p className="text-[11px] font-mono opacity-55 leading-relaxed">
+                No se detectaron discrepancias con las reglas actualmente implementadas para este XML.
+              </p>
             ) : (
-              cfdi.findings.map((finding) => (
-                <div
-                  key={finding.id}
-                  className={`p-3 border rounded flex gap-3 ${
-                    finding.severity === 'critical'
-                      ? 'border-red-500/30 bg-red-50'
-                      : 'border-amber-500/30 bg-amber-50'
-                  }`}
-                >
-                  <AlertTriangle
-                    className={finding.severity === 'critical' ? 'text-red-500 shrink-0' : 'text-amber-500 shrink-0'}
-                    size={16}
-                  />
-                  <div>
-                    <p className={`text-xs font-semibold ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
-                      {finding.title}
-                    </p>
-                    <p className={`text-xs font-mono leading-relaxed mt-1 ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
-                      {finding.summary}
-                    </p>
+              <div className="space-y-3">
+                {cfdi.findings.slice(0, 4).map((finding) => (
+                  <div
+                    key={finding.id}
+                    className={`p-3 border rounded flex gap-3 ${
+                      finding.severity === 'critical'
+                        ? 'border-red-500/30 bg-red-50'
+                        : 'border-amber-500/30 bg-amber-50'
+                    }`}
+                  >
+                    <AlertTriangle
+                      className={finding.severity === 'critical' ? 'text-red-500 shrink-0' : 'text-amber-500 shrink-0'}
+                      size={16}
+                    />
+                    <div>
+                      <p className={`text-xs font-semibold ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
+                        {finding.title}
+                      </p>
+                      <p className={`text-xs font-mono leading-relaxed mt-1 ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
+                        {finding.summary}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ))
+                ))}
+              </div>
             )}
           </div>
 
           <div className="p-4 border-t border-[#141414] bg-[#141414]/5">
-            <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-3">Resumen de Totales</h3>
-            <div className="space-y-2">
-              <div className="flex justify-between text-xs font-mono">
-                <span>Subtotal XML</span>
-                <span>${cfdi.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className="flex justify-between text-[10px] font-mono text-blue-600 italic">
-                <span>Subtotal Calc.</span>
-                <span>${cfdi.subtotalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className={`flex justify-between text-[10px] font-mono ${subtotalDifference !== 0 ? 'text-red-600' : 'text-green-600'}`}>
-                <span>Dif. Subtotal</span>
-                <span>${formatExact(subtotalDifference)}</span>
-              </div>
-              <div className="flex justify-between text-xs font-mono border-t border-[#141414]/10 pt-2">
-                <span>Descuento</span>
-                <span>-${cfdi.descuento.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className="flex justify-between text-xs font-mono pt-2 font-bold">
-                <span>Total XML</span>
-                <span>${cfdi.total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className="flex justify-between text-[10px] font-mono text-blue-600 italic">
-                <span>Total Calc.</span>
-                <span>${cfdi.totalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className={`flex justify-between text-[10px] font-mono ${totalDifference !== 0 ? 'text-red-600' : 'text-green-600'}`}>
-                <span>Dif. Total</span>
-                <span>${formatExact(totalDifference)}</span>
-              </div>
+            <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-3">Resumen</h3>
+            <div className="space-y-2 text-[11px] font-mono">
+              {activeDatasetType === 'ingresos' ? (
+                <>
+                  <div className="flex justify-between gap-3">
+                    <span>Subtotal XML</span>
+                    <span>${cfdi.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="flex justify-between gap-3 text-blue-600 italic">
+                    <span>Subtotal Calc.</span>
+                    <span>${cfdi.subtotalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className={`flex justify-between gap-3 ${subtotalDifference !== 0 ? 'text-red-600' : 'text-green-600'}`}>
+                    <span>Dif. Subtotal</span>
+                    <span>${formatExact(subtotalDifference)}</span>
+                  </div>
+                  <div className="flex justify-between gap-3 border-t border-[#141414]/10 pt-2">
+                    <span>Total XML</span>
+                    <span>${cfdi.total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className="flex justify-between gap-3 text-blue-600 italic">
+                    <span>Total Calc.</span>
+                    <span>${cfdi.totalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div className={`flex justify-between gap-3 ${totalDifference !== 0 ? 'text-red-600' : 'text-green-600'}`}>
+                    <span>Dif. Total</span>
+                    <span>${formatExact(totalDifference)}</span>
+                  </div>
+                </>
+              ) : (
+                activeExtractMetrics.map((metric) => (
+                  <div key={metric.key} className="flex justify-between gap-3">
+                    <span>{metric.label}</span>
+                    <span>{metric.value}</span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </aside>
 
-        {/* Content Area */}
         <section className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-          {/* Info Cards */}
-          <div className="grid grid-cols-3 border-b border-[#141414]">
+          <div className={`grid border-b border-[#141414] ${summaryFields.length >= 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
             {summaryFields.map((field, index) => {
               const Icon = field.icon;
               return (
@@ -1195,7 +1108,11 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
           </div>
 
           <div className="border-b border-[#141414] bg-[#141414]/[0.03]">
-            <div className="px-4 py-2.5 flex items-center justify-between gap-4">
+            <button
+              type="button"
+              onClick={() => setTaxAuditExpanded((current) => !current)}
+              className="w-full px-4 py-2.5 flex items-center justify-between gap-4 text-left hover:bg-[#141414]/[0.04] transition-colors"
+            >
               <div>
                 <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Auditoría de Traslados</p>
                 <p className="text-[11px] font-mono opacity-55 mt-0.5">Comparación entre el detalle por concepto y el agrupado del comprobante.</p>
@@ -1204,8 +1121,13 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                 <span className="text-[10px] font-mono uppercase opacity-50">
                   {cfdi.taxAuditGroups.filter((group) => Math.abs(group.diferencia) !== 0).length} diferencias
                 </span>
+                <ChevronRight
+                  size={14}
+                  className={`opacity-50 transition-transform ${taxAuditExpanded ? 'rotate-90' : 'rotate-0'}`}
+                />
               </div>
-            </div>
+            </button>
+            {taxAuditExpanded && (
             <div className="overflow-auto max-h-36 border-t border-[#141414]/10 bg-white/15">
               <table className="w-full border-collapse">
                 <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]/10">
@@ -1234,256 +1156,10 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                 </tbody>
               </table>
             </div>
+            )}
           </div>
-
-          <div className="grid grid-cols-4 border-b border-[#141414] bg-[#141414]/[0.03]">
-            <div className="p-3 border-r border-[#141414]/10">
-              <p className="text-[10px] font-mono uppercase opacity-50">Registros</p>
-              <p className="text-lg font-serif italic mt-1">{filteredDiagnoseCount.toLocaleString('es-MX')}</p>
-            </div>
-            <div className="p-3 border-r border-[#141414]/10">
-              <p className="text-[10px] font-mono uppercase opacity-50">Modo</p>
-              <p className="text-lg font-serif italic mt-1">{onlyImpacted ? 'Discrepancias' : 'Todos'}</p>
-            </div>
-            <div className="p-3 border-r border-[#141414]/10">
-              <p className="text-[10px] font-mono uppercase opacity-50">Orden</p>
-              <p className="text-lg font-serif italic mt-1">{diagnoseSortDirection === 'asc' ? 'Asc' : 'Desc'}</p>
-            </div>
-            <div className="p-3">
-              <p className="text-[10px] font-mono uppercase opacity-50">Resultados</p>
-              <p className="text-lg font-serif italic mt-1">{diagnoseSearchTerm ? 'Filtrados' : 'Todos'}</p>
-            </div>
-          </div>
-
-          {/* Search & Filters */}
-          <div className="p-4 border-b border-[#141414] flex items-center justify-between bg-white/50">
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
-                <span>Buscar en</span>
-                <select
-                  value={diagnoseColumnFilterKey}
-                  onChange={(e) => {
-                    setDiagnoseColumnFilterKey(e.target.value);
-                    setDiagnosePage(1);
-                  }}
-                  className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
-                >
-                  <option value="all">Todas</option>
-                  {DIAGNOSE_COLUMNS.map((column) => (
-                    <option key={column.key} value={column.key}>
-                      {column.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="relative w-96">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" />
-                <input 
-                  type="text" 
-                  placeholder={`Buscar en ${diagnoseColumnFilterKey === 'all' ? 'todas las columnas' : DIAGNOSE_COLUMNS.find((column) => column.key === diagnoseColumnFilterKey)?.label ?? 'columna'}...`}
-                  className="w-full pl-9 pr-4 py-2 text-xs font-mono bg-transparent border border-[#141414]/20 focus:border-[#141414] outline-none transition-colors"
-                  value={diagnoseSearchTerm}
-                  onChange={(e) => {
-                    setDiagnoseSearchTerm(e.target.value);
-                    setDiagnosePage(1);
-                  }}
-                />
-              </div>
-              <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
-                <span>Ordenar por</span>
-                <select
-                  value={diagnoseSortKey}
-                  onChange={(e) => {
-                    setDiagnoseSortKey(e.target.value);
-                    setDiagnosePage(1);
-                  }}
-                  className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
-                >
-                  <option value="diferencia">Dif.</option>
-                  <option value="descripcion">Descripcion</option>
-                  <option value="claveProdServ">Clave</option>
-                  <option value="cantidad">Cantidad</option>
-                  <option value="valorUnitario">V. Unitario</option>
-                  <option value="importe">Importe XML</option>
-                  <option value="importeCalculado">Importe Calc.</option>
-                </select>
-              </label>
-              <button
-                onClick={() => {
-                  setDiagnoseSortDirection((current) => current === 'asc' ? 'desc' : 'asc');
-                  setDiagnosePage(1);
-                }}
-                className="border border-[#141414]/20 px-3 py-2 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
-              >
-                {diagnoseSortDirection === 'asc' ? 'Asc' : 'Desc'}
-              </button>
-              <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
-                <span>Filas por pagina</span>
-                <select
-                  value={diagnosePageSize}
-                  onChange={(e) => {
-                    setDiagnosePageSize(Number(e.target.value));
-                    setDiagnosePage(1);
-                  }}
-                  className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
-                >
-                  {[50, 100, 250, 500, 1000].map((size) => (
-                    <option key={size} value={size}>
-                      {size}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                onClick={() => {
-                  setDiagnoseSearchTerm('');
-                  setDiagnoseColumnFilterKey('all');
-                  setDiagnosePage(1);
-                  setDiagnosePageSize(100);
-                  setDiagnoseSortKey('diferencia');
-                  setDiagnoseSortDirection('desc');
-                  setOnlyImpacted(true);
-                  setHiddenDiagnoseColumns([]);
-                }}
-                className="border border-[#141414]/20 px-3 py-2 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
-              >
-                Reset grid
-              </button>
-            </div>
-            <div />
-          </div>
-
-          <div className="border-b border-[#141414]/10 bg-[#E4E3E0] px-4 py-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[10px] font-mono uppercase tracking-widest opacity-45">Columnas</span>
-              {DIAGNOSE_COLUMNS.map((column) => {
-                const hidden = hiddenDiagnoseColumns.includes(column.key);
-                return (
-                  <button
-                    key={column.key}
-                    onClick={() =>
-                      setHiddenDiagnoseColumns((current) =>
-                        hidden ? current.filter((key) => key !== column.key) : [...current, column.key]
-                      )
-                    }
-                    className={`px-2.5 py-1 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
-                      hidden
-                        ? 'border-[#141414]/10 text-[#141414]/35 bg-white/50'
-                        : 'border-[#141414]/25 bg-[#141414] text-[#E4E3E0]'
-                    }`}
-                  >
-                    {column.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Table */}
-          <div className="flex-1 overflow-auto">
-            <table className="w-full border-collapse">
-              <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]">
-                <tr className="text-[10px] font-mono uppercase opacity-50 text-left">
-                  {visibleDiagnoseColumns.map((column) => (
-                    <th
-                      key={column.key}
-                      className={`px-3 py-2 font-normal ${
-                        column.key === 'descripcion'
-                          ? ''
-                          : column.key === 'status'
-                            ? 'text-center'
-                            : ['cantidad', 'valorUnitario', 'importe', 'importeCalculado', 'diferencia'].includes(column.key)
-                              ? 'text-right'
-                              : ''
-                      }`}
-                    >
-                      {column.label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#141414]/10">
-                {currentDiagnoseRows.map((c, i) => (
-                  <motion.tr 
-                    key={`${c.claveProdServ}-${c.descripcion}-${diagnosePageStart + i}`}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: i < 6 ? i * 0.03 : 0 }}
-                    onClick={() => setSelectedConcept(c)}
-                    className="group hover:bg-[#141414] hover:text-[#E4E3E0] transition-all cursor-pointer"
-                  >
-                    {visibleDiagnoseColumns.map((column) => {
-                      if (column.key === 'claveProdServ') {
-                        return <td key={column.key} className="px-3 py-2 text-[9px] font-mono whitespace-nowrap">{c.claveProdServ}</td>;
-                      }
-                      if (column.key === 'descripcion') {
-                        return <td key={column.key} className="px-3 py-2 text-[11px] font-medium max-w-xs truncate">{c.descripcion}</td>;
-                      }
-                      if (column.key === 'cantidad') {
-                        return <td key={column.key} className="px-3 py-2 text-[10px] font-mono text-right whitespace-nowrap">{c.cantidad}</td>;
-                      }
-                      if (column.key === 'valorUnitario') {
-                        return <td key={column.key} className="px-3 py-2 text-[10px] font-mono text-right whitespace-nowrap">${c.valorUnitario.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>;
-                      }
-                      if (column.key === 'importe') {
-                        return <td key={column.key} className="px-3 py-2 text-[10px] font-mono text-right whitespace-nowrap">${c.importe.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>;
-                      }
-                      if (column.key === 'importeCalculado') {
-                        return (
-                          <td key={column.key} className="px-3 py-2 text-[10px] font-mono text-right italic opacity-70 whitespace-nowrap">
-                            ${c.importeCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-                          </td>
-                        );
-                      }
-                      if (column.key === 'diferencia') {
-                        return (
-                          <td key={column.key} className={`px-3 py-2 text-[10px] font-mono text-right whitespace-nowrap ${c.diferencia !== 0 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
-                            ${formatExact(c.diferencia)}
-                          </td>
-                        );
-                      }
-                      return (
-                        <td key={column.key} className="px-3 py-2 text-center">
-                          {c.diferencia !== 0 ? (
-                            <AlertTriangle size={14} className="text-red-500 mx-auto" />
-                          ) : (
-                            <CheckCircle2 size={14} className="text-green-500 mx-auto opacity-30 group-hover:opacity-100" />
-                          )}
-                        </td>
-                      );
-                    })}
-                  </motion.tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="p-4 border-t border-[#141414] bg-white/95 backdrop-blur-sm flex items-center justify-between">
-            <div className="flex flex-col">
-              <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">
-                Pagina {safeDiagnosePage} de {diagnoseTotalPages}
-              </p>
-              <p className="text-[10px] font-mono opacity-60 mt-1">
-                {filteredDiagnoseCount === 0
-                  ? 'Registros 0 de 0'
-                  : `Registros ${diagnosePageStart + 1}-${Math.min(diagnosePageStart + currentDiagnoseRows.length, filteredDiagnoseCount)} de ${filteredDiagnoseCount}`}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setDiagnosePage((current) => Math.max(1, current - 1))}
-                disabled={safeDiagnosePage === 1}
-                className="px-3 py-2 border border-[#141414]/20 text-[10px] font-mono uppercase tracking-widest disabled:opacity-30 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
-              >
-                Anterior
-              </button>
-              <button
-                onClick={() => setDiagnosePage((current) => Math.min(diagnoseTotalPages, current + 1))}
-                disabled={safeDiagnosePage === diagnoseTotalPages}
-                className="px-3 py-2 border border-[#141414]/20 text-[10px] font-mono uppercase tracking-widest disabled:opacity-30 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
-              >
-                Siguiente
-              </button>
-            </div>
+          <div className="flex-1 min-h-0 flex flex-col">
+            {renderExtractWorkspace(true)}
           </div>
 
           {/* Concept Detail Modal */}
@@ -1582,7 +1258,6 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
           </AnimatePresence>
         </section>
       </main>
-      )}
     </div>
   );
 }
