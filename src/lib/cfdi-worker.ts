@@ -1,4 +1,6 @@
-import { detectCFDIProfileWorker, parseCFDIWorker, extractIngresoRowsWorker, extractPagoRowsWorker } from './cfdi-worker-analysis';
+import { buildCfdiData, detectCfdiProfile } from '../cfdi/application/cfdiAnalysisService';
+import { extractIngresoRowsData, extractPagoRowsData } from '../cfdi/application/cfdiExtractionService';
+import type { CFDIPagoRow } from '../cfdi/application/cfdiTypes';
 
 function projectProgress(start: number, end: number, stepProgress: number) {
   return Math.round(start + ((end - start) * stepProgress) / 100);
@@ -8,17 +10,17 @@ self.onmessage = async (event: MessageEvent<{ xml: string }>) => {
   try {
     const { xml } = event.data;
     self.postMessage({ progress: 8, label: 'Detectando perfil CFDI', detail: 'Leyendo estructura base del comprobante.' });
-    const profile = detectCFDIProfileWorker(xml);
+    const profile = detectCfdiProfile(xml);
 
     self.postMessage({ progress: 28, label: 'Calculando diagnóstico fiscal', detail: `Perfil detectado: ${profile}.` });
-    const cfdi = parseCFDIWorker(xml);
+    const cfdi = buildCfdiData(xml);
 
     self.postMessage({
       progress: 56,
       label: 'Extrayendo filas de ingresos',
       detail: `${cfdi.conceptos.length.toLocaleString('es-MX')} conceptos detectados · ${cfdi.findings.length.toLocaleString('es-MX')} hallazgos.`,
     });
-    const ingresoRows = extractIngresoRowsWorker(xml, (stepProgress, detail) => {
+    const ingresoRows = extractIngresoRowsData(xml, (stepProgress, detail) => {
       self.postMessage({
         progress: projectProgress(56, 84, stepProgress),
         label: 'Extrayendo filas de ingresos',
@@ -31,9 +33,9 @@ self.onmessage = async (event: MessageEvent<{ xml: string }>) => {
       label: 'Extrayendo filas de pagos',
       detail: `${ingresoRows.length.toLocaleString('es-MX')} filas de ingresos listas.`,
     });
-    let pagoRows = [] as ReturnType<typeof extractPagoRowsWorker>;
+    let pagoRows: CFDIPagoRow[] = [];
     try {
-      pagoRows = extractPagoRowsWorker(xml, (stepProgress, detail) => {
+      pagoRows = extractPagoRowsData(xml, (stepProgress, detail) => {
         self.postMessage({
           progress: projectProgress(84, 96, stepProgress),
           label: 'Extrayendo filas de pagos',
