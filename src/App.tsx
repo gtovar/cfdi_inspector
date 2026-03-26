@@ -289,36 +289,36 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
           </div>
 
           <div className="border-b border-[#141414] bg-[#141414]/[0.03]">
-            <div className="px-4 py-3 flex items-center justify-between">
+            <div className="px-4 py-2.5 flex items-center justify-between">
               <div>
                 <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Auditoría de Traslados</p>
-                <p className="text-xs font-mono opacity-60 mt-1">Comparación entre el detalle por concepto y el agrupado del comprobante.</p>
+                <p className="text-[11px] font-mono opacity-55 mt-0.5">Comparación entre el detalle por concepto y el agrupado del comprobante.</p>
               </div>
               <span className="text-[10px] font-mono uppercase opacity-50">
                 {cfdi.taxAuditGroups.filter((group) => Math.abs(group.diferencia) > 0.000001).length} diferencias
               </span>
             </div>
-            <div className="overflow-auto max-h-44 border-t border-[#141414]/10 bg-white/20">
+            <div className="overflow-auto max-h-36 border-t border-[#141414]/10 bg-white/15">
               <table className="w-full border-collapse">
                 <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]/10">
                   <tr className="text-[10px] font-mono uppercase opacity-50 text-left">
-                    <th className="p-3 font-normal">Impuesto</th>
-                    <th className="p-3 font-normal">Tipo</th>
-                    <th className="p-3 font-normal text-right">Tasa</th>
-                    <th className="p-3 font-normal text-right">Detalle</th>
-                    <th className="p-3 font-normal text-right">Agrupado</th>
-                    <th className="p-3 font-normal text-right">Dif.</th>
+                    <th className="px-3 py-2 font-normal">Impuesto</th>
+                    <th className="px-3 py-2 font-normal">Tipo</th>
+                    <th className="px-3 py-2 font-normal text-right">Tasa</th>
+                    <th className="px-3 py-2 font-normal text-right">Detalle</th>
+                    <th className="px-3 py-2 font-normal text-right">Agrupado</th>
+                    <th className="px-3 py-2 font-normal text-right">Dif.</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#141414]/10">
                   {cfdi.taxAuditGroups.map((group) => (
                     <tr key={group.key}>
-                      <td className="p-3 text-[11px] font-mono">{group.impuesto}</td>
-                      <td className="p-3 text-[11px]">{group.tipoFactor}</td>
-                      <td className="p-3 text-[11px] font-mono text-right">{(group.tasaOCuota * 100).toFixed(2)}%</td>
-                      <td className="p-3 text-[11px] font-mono text-right">${group.importeDetalle.toFixed(2)}</td>
-                      <td className="p-3 text-[11px] font-mono text-right">${group.importeAgrupado.toFixed(2)}</td>
-                      <td className={`p-3 text-[11px] font-mono text-right ${Math.abs(group.diferencia) > 0.000001 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
+                      <td className="px-3 py-2 text-[10px] font-mono">{group.impuesto}</td>
+                      <td className="px-3 py-2 text-[10px]">{group.tipoFactor}</td>
+                      <td className="px-3 py-2 text-[10px] font-mono text-right">{(group.tasaOCuota * 100).toFixed(2)}%</td>
+                      <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeDetalle.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeAgrupado.toFixed(2)}</td>
+                      <td className={`px-3 py-2 text-[10px] font-mono text-right ${Math.abs(group.diferencia) > 0.000001 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
                         ${group.diferencia.toFixed(2)}
                       </td>
                     </tr>
