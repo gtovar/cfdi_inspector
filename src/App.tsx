@@ -29,6 +29,8 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [onlyImpacted, setOnlyImpacted] = useState(true);
   const [selectedConcept, setSelectedConcept] = useState<CFDIConcept | null>(null);
+  const [copiedDiagnostic, setCopiedDiagnostic] = useState(false);
+  const [reportExported, setReportExported] = useState(false);
 
   const handleFileSelect = (xml: string) => {
     try {
@@ -81,11 +83,16 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     a.href = url;
     a.download = `Reporte_CFDI_${cfdi.uuid.substring(0,8)}.txt`;
     a.click();
+    URL.revokeObjectURL(url);
+    setReportExported(true);
+    window.setTimeout(() => setReportExported(false), 1600);
   };
 
   const copyDiagnostic = () => {
     if (!cfdi) return;
     navigator.clipboard.writeText(cfdi.supportText);
+    setCopiedDiagnostic(true);
+    window.setTimeout(() => setCopiedDiagnostic(false), 1600);
   };
 
   const conceptPool = cfdi
@@ -96,6 +103,8 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     c.descripcion.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.claveProdServ.includes(searchTerm)
   );
+  const subtotalDifference = Math.abs(cfdi?.subtotalCalculado ?? 0 - (cfdi?.subtotal ?? 0));
+  const totalDifference = Math.abs(cfdi?.totalCalculado ?? 0 - (cfdi?.total ?? 0));
 
   if (!cfdi) {
     return (
@@ -135,17 +144,25 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
           </div>
           <button
             onClick={copyDiagnostic}
-            className="border border-[#141414]/20 px-3 py-2 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors flex items-center gap-2"
+            className={`border px-3 py-2 text-[10px] font-mono uppercase tracking-widest transition-colors flex items-center gap-2 ${
+              copiedDiagnostic
+                ? 'border-[#141414] bg-[#141414] text-[#E4E3E0]'
+                : 'border-[#141414]/20 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0]'
+            }`}
           >
             <Copy size={12} />
-            Copiar diagnóstico
+            {copiedDiagnostic ? 'Copiado' : 'Copiar diagnóstico'}
           </button>
           <button 
             onClick={exportReport}
-            className="bg-[#141414] text-[#E4E3E0] px-4 py-2 text-xs font-mono uppercase tracking-widest hover:opacity-80 transition-opacity flex items-center gap-2"
+            className={`px-4 py-2 text-xs font-mono uppercase tracking-widest transition-opacity flex items-center gap-2 ${
+              reportExported
+                ? 'bg-green-700 text-[#E4E3E0]'
+                : 'bg-[#141414] text-[#E4E3E0] hover:opacity-80'
+            }`}
           >
             <Download size={14} />
-            Exportar Reporte
+            {reportExported ? 'Reporte descargado' : 'Exportar Reporte'}
           </button>
         </div>
       </header>
@@ -213,20 +230,32 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
             <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-3">Resumen de Totales</h3>
             <div className="space-y-2">
               <div className="flex justify-between text-xs font-mono">
-                <span>Subtotal</span>
+                <span>Subtotal XML</span>
                 <span>${cfdi.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
               </div>
-              <div className="flex justify-between text-xs font-mono">
+              <div className="flex justify-between text-[10px] font-mono text-blue-600 italic">
+                <span>Subtotal Calc.</span>
+                <span>${cfdi.subtotalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
+              </div>
+              <div className={`flex justify-between text-[10px] font-mono ${subtotalDifference > 0.000001 ? 'text-red-600' : 'text-green-600'}`}>
+                <span>Dif. Subtotal</span>
+                <span>${subtotalDifference.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 6 })}</span>
+              </div>
+              <div className="flex justify-between text-xs font-mono border-t border-[#141414]/10 pt-2">
                 <span>Descuento</span>
                 <span>-${cfdi.descuento.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
               </div>
-              <div className="flex justify-between text-xs font-mono border-t border-[#141414]/10 pt-2 font-bold">
+              <div className="flex justify-between text-xs font-mono pt-2 font-bold">
                 <span>Total XML</span>
                 <span>${cfdi.total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
               </div>
               <div className="flex justify-between text-[10px] font-mono text-blue-600 italic">
                 <span>Total Calc.</span>
                 <span>${cfdi.totalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
+              </div>
+              <div className={`flex justify-between text-[10px] font-mono ${totalDifference > 0.000001 ? 'text-red-600' : 'text-green-600'}`}>
+                <span>Dif. Total</span>
+                <span>${totalDifference.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 6 })}</span>
               </div>
             </div>
           </div>

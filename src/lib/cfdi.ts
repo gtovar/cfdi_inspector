@@ -68,6 +68,10 @@ export interface CFDIData {
   supportText: string;
 }
 
+function summarizeDifference(xmlValue: number, calcValue: number) {
+  return `XML ${xmlValue.toFixed(2)} vs cálculo ${calcValue.toFixed(2)}.`;
+}
+
 export function parseCFDI(xmlString: string): CFDIData {
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(xmlString, "text/xml");
@@ -213,7 +217,7 @@ export function parseCFDI(xmlString: string): CFDIData {
     .slice(0, 3);
 
   conceptWarnings.forEach(({ concepto, index }) => {
-    const summary = `${concepto.descripcion}: XML ${concepto.importe.toFixed(2)} vs cálculo ${concepto.importeCalculado.toFixed(2)}.`;
+    const summary = `${concepto.descripcion}: ${summarizeDifference(concepto.importe, concepto.importeCalculado)}`;
     data.findings.push({
       id: `concept-${index}`,
       severity: concepto.diferencia > 0.01 ? 'critical' : 'warning',
@@ -234,7 +238,7 @@ export function parseCFDI(xmlString: string): CFDIData {
     .slice(0, 3);
 
   taxWarnings.forEach(({ concepto, impuesto, conceptIndex, taxIndex }) => {
-    const summary = `${concepto.descripcion}: traslado ${impuesto.impuesto} XML ${impuesto.importe.toFixed(2)} vs cálculo ${impuesto.importeCalculado.toFixed(2)}.`;
+    const summary = `${concepto.descripcion}: traslado ${impuesto.impuesto} ${summarizeDifference(impuesto.importe, impuesto.importeCalculado)}`;
     data.findings.push({
       id: `tax-${conceptIndex}-${taxIndex}`,
       severity: impuesto.diferencia > 0.01 ? 'critical' : 'warning',
@@ -319,6 +323,21 @@ export function parseCFDI(xmlString: string): CFDIData {
   if (data.findings.length === 0 && data.hallazgos.length === 0) {
     data.hallazgos = [];
   }
+
+  const uniqueFindings = new Map<string, AuditFinding>();
+  data.findings.forEach((finding) => {
+    const key = `${finding.severity}|${finding.title}|${finding.summary}`;
+    if (!uniqueFindings.has(key)) {
+      uniqueFindings.set(key, finding);
+    }
+  });
+
+  data.findings = Array.from(uniqueFindings.values()).sort((a, b) => {
+    if (a.severity !== b.severity) {
+      return a.severity === 'critical' ? -1 : 1;
+    }
+    return a.title.localeCompare(b.title, 'es');
+  });
 
   const criticalFindings = data.findings.filter((finding) => finding.severity === 'critical').length;
   const warningFindings = data.findings.filter((finding) => finding.severity === 'warning').length;
