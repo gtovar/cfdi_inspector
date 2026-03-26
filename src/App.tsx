@@ -3,25 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   FileText, 
   AlertTriangle, 
   CheckCircle2, 
   Search, 
-  Download, 
   ArrowLeft,
-  Copy,
-  Info,
   ChevronRight,
   Database,
   User,
-  Hash,
   Calendar,
-  Layers
+  Sparkles
 } from 'lucide-react';
-import { parseCFDI, CFDIData, CFDIConcept } from './lib/cfdi';
+import type { LucideIcon } from 'lucide-react';
+import { CFDIData, CFDIConcept, CFDIProfile, CFDIIngresoRow, CFDIPagoRow } from './lib/cfdi';
+import { analyzeCFDIWithWorker } from './lib/cfdi-worker-client';
 import FileUpload from './components/FileUpload';
 
 function formatExact(value: number) {
@@ -32,19 +30,177 @@ function formatExact(value: number) {
   });
 }
 
+type ExtractMode = 'ingresos' | 'pagos';
+type ExtractSortDirection = 'asc' | 'desc';
+
+interface SummaryFieldCard {
+  key: string;
+  label: string;
+  value: string;
+  icon: LucideIcon;
+}
+
+interface SummaryMetricCard {
+  key: string;
+  label: string;
+  value: string;
+}
+
+const INGRESO_COLUMNS = [
+  { key: 'uuid', label: 'UUID' },
+  { key: 'claveProdServ', label: 'Clave' },
+  { key: 'descripcion', label: 'Descripcion' },
+  { key: 'objetoImp', label: 'ObjetoImp' },
+  { key: 'tipoImp', label: 'Tipo Imp' },
+  { key: 'impuesto', label: 'Impuesto' },
+  { key: 'tasaCuota', label: 'Tasa/Cuota' },
+  { key: 'importeImp', label: 'Importe Imp' },
+] as const;
+
+const PAGO_COLUMNS = [
+  { key: 'uuidCFDI', label: 'UUID CFDI' },
+  { key: 'fechaPago', label: 'Fecha Pago' },
+  { key: 'uuidDR', label: 'UUID DR' },
+  { key: 'parcialidad', label: 'Parcialidad' },
+  { key: 'impPagado', label: 'Imp Pagado' },
+  { key: 'baseDR', label: 'Base DR' },
+  { key: 'impuestoDR', label: 'Impuesto DR' },
+  { key: 'importeDR', label: 'Importe DR' },
+] as const;
+
+const DIAGNOSE_COLUMNS = [
+  { key: 'claveProdServ', label: 'Clave' },
+  { key: 'descripcion', label: 'Descripcion' },
+  { key: 'cantidad', label: 'Cant.' },
+  { key: 'valorUnitario', label: 'V. Unitario' },
+  { key: 'importe', label: 'Importe XML' },
+  { key: 'importeCalculado', label: 'Importe Calc.' },
+  { key: 'diferencia', label: 'Dif.' },
+  { key: 'status', label: 'Status' },
+] as const;
+
+function getExtractCellValue(row: Record<string, string>, key: string) {
+  return row[key] ?? '';
+}
+
+function getDiagnoseCellValue(concept: CFDIConcept, key: string) {
+  switch (key) {
+    case 'claveProdServ':
+      return concept.claveProdServ ?? '';
+    case 'descripcion':
+      return concept.descripcion ?? '';
+    case 'cantidad':
+      return String(concept.cantidad ?? '');
+    case 'valorUnitario':
+      return String(concept.valorUnitario ?? '');
+    case 'importe':
+      return String(concept.importe ?? '');
+    case 'importeCalculado':
+      return String(concept.importeCalculado ?? '');
+    case 'diferencia':
+      return String(concept.diferencia ?? '');
+    case 'status':
+      return concept.diferencia !== 0 ? 'discrepancia' : 'ok';
+    default:
+      return '';
+  }
+}
+
+function getProfileLabel(profile: CFDIProfile) {
+  switch (profile) {
+    case 'ingreso':
+      return 'Ingreso';
+    case 'pagos':
+      return 'Pagos';
+    default:
+      return 'Desconocido';
+  }
+}
+
+function getProfileRecommendation(profile: CFDIProfile) {
+  switch (profile) {
+    case 'ingreso':
+      return 'Sugerido: diagnostico arriba y tabla operativa abajo';
+    case 'pagos':
+      return 'Sugerido: tabla operativa de pagos';
+    default:
+      return 'Sugerido: revisar el XML antes de extraer';
+  }
+}
+
 export default function App() {
+  const [extractMode, setExtractMode] = useState<ExtractMode>('ingresos');
+  const [profile, setProfile] = useState<CFDIProfile>('unknown');
   const [cfdi, setCfdi] = useState<CFDIData | null>(null);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [ingresoRows, setIngresoRows] = useState<CFDIIngresoRow[]>([]);
+  const [pagoRows, setPagoRows] = useState<CFDIPagoRow[]>([]);
+  const [analysisEngine, setAnalysisEngine] = useState<'idle' | 'worker' | 'fallback'>('idle');
+  const [analysisReason, setAnalysisReason] = useState('');
+  const [analysisStageLabel, setAnalysisStageLabel] = useState('Analizando estructura CFDI');
+  const [analysisStageProgress, setAnalysisStageProgress] = useState(100);
+  const [analysisStageDetail, setAnalysisStageDetail] = useState('');
+  const [diagnoseSearchTerm, setDiagnoseSearchTerm] = useState('');
+  const [diagnoseColumnFilterKey, setDiagnoseColumnFilterKey] = useState<string>('all');
+  const [extractSearchTerm, setExtractSearchTerm] = useState('');
+  const [extractColumnFilterKey, setExtractColumnFilterKey] = useState<string>('all');
   const [onlyImpacted, setOnlyImpacted] = useState(true);
   const [selectedConcept, setSelectedConcept] = useState<CFDIConcept | null>(null);
-  const [copiedDiagnostic, setCopiedDiagnostic] = useState(false);
   const [reportExported, setReportExported] = useState(false);
   const [taxesExported, setTaxesExported] = useState(false);
+  const [ingresosExported, setIngresosExported] = useState(false);
+  const [pagosExported, setPagosExported] = useState(false);
+  const [pagosExportError, setPagosExportError] = useState(false);
+  const [tableExported, setTableExported] = useState(false);
+  const [tableExportError, setTableExportError] = useState(false);
+  const [sourceXml, setSourceXml] = useState('');
+  const [extractPage, setExtractPage] = useState(1);
+  const [extractPageSize, setExtractPageSize] = useState(100);
+  const [extractSortKey, setExtractSortKey] = useState<string>('descripcion');
+  const [extractSortDirection, setExtractSortDirection] = useState<ExtractSortDirection>('asc');
+  const [hiddenIngresoColumns, setHiddenIngresoColumns] = useState<string[]>([]);
+  const [hiddenPagoColumns, setHiddenPagoColumns] = useState<string[]>([]);
+  const [hiddenDiagnoseColumns, setHiddenDiagnoseColumns] = useState<string[]>([]);
+  const [diagnosePage, setDiagnosePage] = useState(1);
+  const [diagnosePageSize, setDiagnosePageSize] = useState(100);
+  const [diagnoseSortKey, setDiagnoseSortKey] = useState<string>('diferencia');
+  const [diagnoseSortDirection, setDiagnoseSortDirection] = useState<ExtractSortDirection>('desc');
 
-  const handleFileSelect = (xml: string) => {
+  const handleFileSelect = async (xml: string) => {
     try {
-      const data = parseCFDI(xml);
-      setCfdi(data);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      const { bundle, engine, reason } = await analyzeCFDIWithWorker(xml, ({ label, progress, detail }) => {
+        setAnalysisStageLabel(label);
+        setAnalysisStageProgress(progress);
+        setAnalysisStageDetail(detail ?? '');
+      });
+      setSourceXml(xml);
+      setCfdi(bundle.cfdi);
+      setIngresoRows(bundle.ingresoRows);
+      setPagoRows(bundle.pagoRows);
+      setProfile(bundle.profile);
+      setAnalysisEngine(engine);
+      setAnalysisReason(reason ?? '');
+      setAnalysisStageLabel('Analizando estructura CFDI');
+      setAnalysisStageProgress(100);
+      setAnalysisStageDetail('');
+      setExtractSearchTerm('');
+      setExtractColumnFilterKey('all');
+      setDiagnoseSearchTerm('');
+      setDiagnoseColumnFilterKey('all');
+      setExtractPage(1);
+      setExtractPageSize(100);
+      setExtractSortKey(bundle.profile === 'pagos' ? 'fechaPago' : 'descripcion');
+      setExtractSortDirection('asc');
+      setDiagnosePage(1);
+      setDiagnosePageSize(100);
+      setDiagnoseSortKey('diferencia');
+      setDiagnoseSortDirection('desc');
+      setHiddenDiagnoseColumns([]);
+      if (bundle.profile === 'pagos') {
+        setExtractMode('pagos');
+      } else {
+        setExtractMode('ingresos');
+      }
     } catch (error) {
       console.error("Error parsing CFDI:", error);
       alert("Error al procesar el XML. Asegúrate de que sea un CFDI válido.");
@@ -97,13 +253,6 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     window.setTimeout(() => setReportExported(false), 1600);
   };
 
-  const copyDiagnostic = () => {
-    if (!cfdi) return;
-    navigator.clipboard.writeText(cfdi.supportText);
-    setCopiedDiagnostic(true);
-    window.setTimeout(() => setCopiedDiagnostic(false), 1600);
-  };
-
   const exportTaxBreakdown = () => {
     if (!cfdi) return;
 
@@ -153,16 +302,705 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     window.setTimeout(() => setTaxesExported(false), 1600);
   };
 
+  const exportIngresosCsv = () => {
+    if (!cfdi) return;
+
+    const headers = [
+      'UUID',
+      'Fecha',
+      'Serie',
+      'Folio',
+      'RFC_Emisor',
+      'Nombre_Emisor',
+      'RFC_Receptor',
+      'Nombre_Receptor',
+      'UsoCFDI',
+      'MetodoPago',
+      'FormaPago',
+      'Moneda',
+      'TipoCambio',
+      'Subtotal',
+      'Descuento',
+      'Total',
+      'ClaveProdServ',
+      'Cantidad',
+      'Descripcion',
+      'ValorUnitario',
+      'Importe',
+      'ObjetoImp',
+      'TipoImp',
+      'Base',
+      'Impuesto',
+      'TipoFactor',
+      'TasaOCuota',
+      'ImporteImp',
+    ];
+
+    const escapeCsv = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+    const csv = [
+      headers.join(','),
+      ...ingresoRows.map((row) => [
+        row.uuid,
+        row.fecha,
+        row.serie,
+        row.folio,
+        row.rfcEmisor,
+        row.nombreEmisor,
+        row.rfcReceptor,
+        row.nombreReceptor,
+        row.usoCfdi,
+        row.metodoPago,
+        row.formaPago,
+        row.moneda,
+        row.tipoCambio,
+        row.subtotal,
+        row.descuento,
+        row.total,
+        row.claveProdServ,
+        row.cantidad,
+        row.descripcion,
+        row.valorUnitario,
+        row.importe,
+        row.objetoImp,
+        row.tipoImp,
+        row.baseImp,
+        row.impuesto,
+        row.tipoFactor,
+        row.tasaCuota,
+        row.importeImp,
+      ].map(escapeCsv).join(',')),
+    ].join('\n');
+
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `CFDI_Ingresos_${cfdi.uuid.substring(0, 8)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setIngresosExported(true);
+    window.setTimeout(() => setIngresosExported(false), 1600);
+  };
+
+  const exportPagosCsv = () => {
+    if (!cfdi) return;
+    try {
+      if (pagoRows.length === 0) {
+        throw new Error('No es complemento de pagos');
+      }
+      const headers = [
+        'UUID_CFDI',
+        'Fecha_CFDI',
+        'RFC_Emisor',
+        'RFC_Receptor',
+        'FechaPago',
+        'FormaPago',
+        'MonedaP',
+        'Monto',
+        'UUID_DR',
+        'SerieFolio',
+        'Parcialidad',
+        'ImpPagado',
+        'SaldoInsoluto',
+        'BaseDR',
+        'ImpuestoDR',
+        'TipoFactorDR',
+        'TasaOCuotaDR',
+        'ImporteDR',
+      ];
+
+      const escapeCsv = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+      const csv = [
+        headers.join(','),
+        ...pagoRows.map((row) => [
+          row.uuidCFDI,
+          row.fechaCFDI,
+          row.rfcEmisor,
+          row.rfcReceptor,
+          row.fechaPago,
+          row.formaPago,
+          row.monedaP,
+          row.monto,
+          row.uuidDR,
+          row.serieFolio,
+          row.parcialidad,
+          row.impPagado,
+          row.saldoInsoluto,
+          row.baseDR,
+          row.impuestoDR,
+          row.tipoFactorDR,
+          row.tasaCuotaDR,
+          row.importeDR,
+        ].map(escapeCsv).join(',')),
+      ].join('\n');
+
+      const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `CFDI_Pagos_${cfdi.uuid.substring(0, 8)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setPagosExportError(false);
+      setPagosExported(true);
+      window.setTimeout(() => setPagosExported(false), 1600);
+    } catch (error) {
+      console.error('Error exporting pagos CSV:', error);
+      setPagosExported(false);
+      setPagosExportError(true);
+      window.setTimeout(() => setPagosExportError(false), 2200);
+    }
+  };
+
+  const exportCurrentTable = () => {
+    try {
+      if (sortedExtractRows.length === 0 || visibleExtractColumns.length === 0) {
+        throw new Error('Sin datos');
+      }
+
+      const escapeCsv = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+      const headers = visibleExtractColumns.map((column) => column.label);
+      const csvRows = sortedExtractRows.map((row) =>
+        visibleExtractColumns.map((column) => getExtractCellValue(row as Record<string, string>, column.key)).map(escapeCsv).join(',')
+      );
+
+      const csv = [headers.join(','), ...csvRows].join('\n');
+      const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Tabla_${extractMode}_${cfdi?.uuid?.substring(0, 8) || 'cfdi'}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setTableExportError(false);
+      setTableExported(true);
+      window.setTimeout(() => setTableExported(false), 1600);
+    } catch {
+      setTableExported(false);
+      setTableExportError(true);
+      window.setTimeout(() => setTableExportError(false), 1600);
+    }
+  };
+
   const conceptPool = cfdi
     ? (onlyImpacted ? cfdi.impactedConceptIndexes.map((index) => cfdi.conceptos[index]).filter(Boolean) : cfdi.conceptos)
     : [];
 
-  const filteredConceptos = conceptPool.filter(c => 
-    c.descripcion.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.claveProdServ.includes(searchTerm)
-  );
+  const activeExtractBaseRows = extractMode === 'ingresos' ? ingresoRows : pagoRows;
+  const extractColumns = extractMode === 'ingresos' ? INGRESO_COLUMNS : PAGO_COLUMNS;
+  const activeHiddenColumns = extractMode === 'ingresos' ? hiddenIngresoColumns : hiddenPagoColumns;
+  const visibleExtractColumns = extractColumns.filter((column) => !activeHiddenColumns.includes(column.key));
+  const visibleDiagnoseColumns = DIAGNOSE_COLUMNS.filter((column) => !hiddenDiagnoseColumns.includes(column.key));
+  const filteredExtractRows = activeExtractBaseRows.filter((row) => {
+    const search = extractSearchTerm.trim().toLowerCase();
+    if (!search) return true;
+
+    if (extractColumnFilterKey === 'all') {
+      return Object.values(row).some((value) => String(value).toLowerCase().includes(search));
+    }
+
+    return getExtractCellValue(row as Record<string, string>, extractColumnFilterKey).toLowerCase().includes(search);
+  });
+  const filteredIngresoRows = extractMode === 'ingresos' ? filteredExtractRows as CFDIIngresoRow[] : ingresoRows;
+  const filteredPagoRows = extractMode === 'pagos' ? filteredExtractRows as CFDIPagoRow[] : pagoRows;
+  const conceptosDetectados = new Set(
+    ingresoRows.map((row) => `${row.uuid}|${row.claveProdServ}|${row.descripcion}|${row.importe}`)
+  ).size;
+  const conceptosConImpuesto = new Set(
+    ingresoRows
+      .filter((row) => row.tipoImp)
+      .map((row) => `${row.uuid}|${row.claveProdServ}|${row.descripcion}`)
+  ).size;
+  const pagosDetectados = new Set(
+    pagoRows.map((row) => `${row.uuidCFDI}|${row.fechaPago}|${row.monto}|${row.formaPago}`)
+  ).size;
+  const doctosRelacionadosDetectados = new Set(
+    pagoRows.map((row) => `${row.uuidCFDI}|${row.uuidDR}|${row.serieFolio}|${row.parcialidad}`)
+  ).size;
+  const registrosConImpuestoDr = pagoRows.filter((row) => row.impuestoDR || row.importeDR).length;
+
+  const filteredConceptos = conceptPool.filter((concept) => {
+    const search = diagnoseSearchTerm.trim().toLowerCase();
+    if (!search) return true;
+
+    if (diagnoseColumnFilterKey === 'all') {
+      return DIAGNOSE_COLUMNS.some((column) => getDiagnoseCellValue(concept, column.key).toLowerCase().includes(search));
+    }
+
+    return getDiagnoseCellValue(concept, diagnoseColumnFilterKey).toLowerCase().includes(search);
+  });
   const subtotalDifference = Math.abs((cfdi?.subtotalCalculado ?? 0) - (cfdi?.subtotal ?? 0));
   const totalDifference = Math.abs((cfdi?.totalCalculado ?? 0) - (cfdi?.total ?? 0));
+  const sortedDiagnoseRows = useMemo(() => {
+    const rows = [...filteredConceptos];
+    rows.sort((left, right) => {
+      const getValue = (concept: CFDIConcept) => {
+        switch (diagnoseSortKey) {
+          case 'claveProdServ':
+            return concept.claveProdServ;
+          case 'descripcion':
+            return concept.descripcion;
+          case 'cantidad':
+            return concept.cantidad;
+          case 'valorUnitario':
+            return concept.valorUnitario;
+          case 'importe':
+            return concept.importe;
+          case 'importeCalculado':
+            return concept.importeCalculado;
+          case 'diferencia':
+          default:
+            return concept.diferencia;
+        }
+      };
+
+      const leftValue = getValue(left);
+      const rightValue = getValue(right);
+
+      if (typeof leftValue === 'number' && typeof rightValue === 'number') {
+        return diagnoseSortDirection === 'asc' ? leftValue - rightValue : rightValue - leftValue;
+      }
+
+      const comparison = String(leftValue).localeCompare(String(rightValue), 'es', { numeric: true, sensitivity: 'base' });
+      return diagnoseSortDirection === 'asc' ? comparison : -comparison;
+    });
+    return rows;
+  }, [filteredConceptos, diagnoseSortDirection, diagnoseSortKey]);
+
+  const sortedExtractRows = useMemo(() => {
+    const rows = [...filteredExtractRows];
+    rows.sort((left, right) => {
+      const leftValue = getExtractCellValue(left as Record<string, string>, extractSortKey).toLowerCase();
+      const rightValue = getExtractCellValue(right as Record<string, string>, extractSortKey).toLowerCase();
+
+      const leftNumber = Number(leftValue);
+      const rightNumber = Number(rightValue);
+      const bothNumeric = !Number.isNaN(leftNumber) && !Number.isNaN(rightNumber) && leftValue !== '' && rightValue !== '';
+
+      if (bothNumeric) {
+        return extractSortDirection === 'asc' ? leftNumber - rightNumber : rightNumber - leftNumber;
+      }
+
+      const comparison = leftValue.localeCompare(rightValue, 'es', { numeric: true, sensitivity: 'base' });
+      return extractSortDirection === 'asc' ? comparison : -comparison;
+    });
+    return rows;
+  }, [filteredExtractRows, extractSortDirection, extractSortKey]);
+
+  const filteredExtractCount = sortedExtractRows.length;
+  const extractTotalPages = Math.max(1, Math.ceil(filteredExtractCount / extractPageSize));
+  const safeExtractPage = Math.min(extractPage, extractTotalPages);
+  const extractPageStart = filteredExtractCount === 0 ? 0 : (safeExtractPage - 1) * extractPageSize;
+  const currentPageRows = sortedExtractRows.slice(extractPageStart, extractPageStart + extractPageSize);
+  const filteredDiagnoseCount = sortedDiagnoseRows.length;
+  const diagnoseTotalPages = Math.max(1, Math.ceil(filteredDiagnoseCount / diagnosePageSize));
+  const safeDiagnosePage = Math.min(diagnosePage, diagnoseTotalPages);
+  const diagnosePageStart = filteredDiagnoseCount === 0 ? 0 : (safeDiagnosePage - 1) * diagnosePageSize;
+  const currentDiagnoseRows = sortedDiagnoseRows.slice(diagnosePageStart, diagnosePageStart + diagnosePageSize);
+
+  const summaryFieldBuilders: Record<CFDIProfile, () => SummaryFieldCard[]> = {
+    ingreso: () => (cfdi ? [
+      { key: 'emisor', label: 'Emisor', value: cfdi.emisor || '-', icon: User },
+      { key: 'receptor', label: 'Receptor', value: cfdi.receptor || '-', icon: Database },
+      {
+        key: 'fecha',
+        label: 'Fecha timbrado',
+        value: cfdi.fecha ? new Date(cfdi.fecha).toLocaleString() : '-',
+        icon: Calendar,
+      },
+    ] : []),
+    pagos: () => {
+      const firstPago = pagoRows[0];
+      return [
+        { key: 'emisor', label: 'Emisor', value: cfdi?.emisor || firstPago?.rfcEmisor || '-', icon: User },
+        { key: 'receptor', label: 'Receptor', value: cfdi?.receptor || firstPago?.rfcReceptor || '-', icon: Database },
+        {
+          key: 'fecha',
+          label: 'Fecha CFDI',
+          value: firstPago?.fechaCFDI ? new Date(firstPago.fechaCFDI).toLocaleString() : (cfdi?.fecha ? new Date(cfdi.fecha).toLocaleString() : '-'),
+          icon: Calendar,
+        },
+      ];
+    },
+    unknown: () => (cfdi ? [
+      { key: 'emisor', label: 'Emisor', value: cfdi.emisor || '-', icon: User },
+      { key: 'receptor', label: 'Receptor', value: cfdi.receptor || '-', icon: Database },
+      {
+        key: 'fecha',
+        label: 'Fecha detectada',
+        value: cfdi.fecha ? new Date(cfdi.fecha).toLocaleString() : '-',
+        icon: Calendar,
+      },
+    ] : []),
+  };
+
+  const extractMetricBuilders: Record<ExtractMode, () => SummaryMetricCard[]> = {
+    ingresos: () => [
+      { key: 'rows', label: 'Registros', value: filteredIngresoRows.length.toLocaleString('es-MX') },
+      { key: 'concepts', label: 'Conceptos', value: conceptosDetectados.toLocaleString('es-MX') },
+      { key: 'taxed', label: 'Con impuesto', value: conceptosConImpuesto.toLocaleString('es-MX') },
+      { key: 'results', label: 'Resultados', value: extractSearchTerm ? 'Filtrados' : 'Todos' },
+    ],
+    pagos: () => [
+      { key: 'rows', label: 'Registros', value: filteredPagoRows.length.toLocaleString('es-MX') },
+      { key: 'payments', label: 'Pagos', value: pagosDetectados.toLocaleString('es-MX') },
+      { key: 'documents', label: 'Doctos Rel.', value: doctosRelacionadosDetectados.toLocaleString('es-MX') },
+      { key: 'drTax', label: 'Con impuesto DR', value: registrosConImpuestoDr.toLocaleString('es-MX') },
+    ],
+  };
+
+  const summaryFields = summaryFieldBuilders[profile]?.() ?? [];
+  const activeExtractMetrics = extractMetricBuilders[extractMode]();
+
+  useEffect(() => {
+    if (extractPage > extractTotalPages) {
+      setExtractPage(extractTotalPages);
+    }
+  }, [extractPage, extractTotalPages]);
+
+  useEffect(() => {
+    if (diagnosePage > diagnoseTotalPages) {
+      setDiagnosePage(diagnoseTotalPages);
+    }
+  }, [diagnosePage, diagnoseTotalPages]);
+
+  const renderExtractWorkspace = (embedded = false) => (
+    <section className={embedded ? 'h-[42vh] border-t border-[#141414] bg-white/10 flex flex-col' : 'flex-1 flex flex-col overflow-hidden relative'}>
+      {embedded ? (
+        <div className="px-4 py-3 border-b border-[#141414] bg-[#141414]/[0.03]">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Tabla Operativa</p>
+              <p className="text-[11px] font-mono opacity-60 mt-1">
+                Una sola salida de trabajo: discrepancias arriba, filas operativas abajo y exportación directa a CSV.
+              </p>
+            </div>
+            <span className="px-2 py-1 text-[10px] font-mono uppercase tracking-widest bg-[#141414] text-[#E4E3E0]">
+              Ingresos
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 border-b border-[#141414]">
+          <div className="p-4 border-r border-[#141414]">
+            <p className="text-[10px] font-mono uppercase opacity-50">
+              {extractMode === 'ingresos' ? 'Unidad de lectura' : 'Unidad de extracción'}
+            </p>
+            <p className="text-xs font-bold mt-1">
+              {extractMode === 'ingresos' ? 'Una fila por concepto e impuesto' : 'Una fila por documento relacionado e impuesto DR'}
+            </p>
+          </div>
+          <div className="p-4 border-r border-[#141414]">
+            <p className="text-[10px] font-mono uppercase opacity-50">Origen</p>
+            <p className="text-xs font-bold mt-1">
+              {extractMode === 'ingresos' ? 'Conceptos / Traslados / Retenciones' : 'Pago / DoctoRelacionado / DR'}
+            </p>
+          </div>
+          <div className="p-4">
+            <p className="text-[10px] font-mono uppercase opacity-50">Vista</p>
+            <p className="text-xs font-bold mt-1">Grid paginada sobre dataset completo</p>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-4 border-b border-[#141414] bg-[#141414]/[0.03]">
+        {activeExtractMetrics.map((metric, index) => (
+          <div
+            key={metric.key}
+            className={`p-3 ${index < activeExtractMetrics.length - 1 ? 'border-r border-[#141414]/10' : ''}`}
+          >
+            <p className="text-[10px] font-mono uppercase opacity-50">{metric.label}</p>
+            <p className="text-lg font-serif italic mt-1">{metric.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="p-4 border-b border-[#141414] flex items-center justify-between bg-white/50">
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
+            <span>Buscar en</span>
+            <select
+              value={extractColumnFilterKey}
+              onChange={(e) => {
+                setExtractColumnFilterKey(e.target.value);
+                setExtractPage(1);
+              }}
+              className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
+            >
+              <option value="all">Todas</option>
+              {extractColumns.map((column) => (
+                <option key={column.key} value={column.key}>
+                  {column.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="relative w-80">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" />
+            <input
+              type="text"
+              placeholder={`Buscar en ${extractColumnFilterKey === 'all' ? 'todas las columnas' : extractColumns.find((column) => column.key === extractColumnFilterKey)?.label ?? 'columna'}...`}
+              className="w-full pl-9 pr-4 py-2 text-xs font-mono bg-transparent border border-[#141414]/20 focus:border-[#141414] outline-none transition-colors"
+              value={extractSearchTerm}
+              onChange={(e) => {
+                setExtractSearchTerm(e.target.value);
+                setExtractPage(1);
+              }}
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
+            <span>Ordenar por</span>
+            <select
+              value={extractSortKey}
+              onChange={(e) => {
+                setExtractSortKey(e.target.value);
+                setExtractPage(1);
+              }}
+              className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
+            >
+              {extractColumns.map((column) => (
+                <option key={column.key} value={column.key}>
+                  {column.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={() => {
+              setExtractSortDirection((current) => current === 'asc' ? 'desc' : 'asc');
+              setExtractPage(1);
+            }}
+            className="border border-[#141414]/20 px-3 py-2 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+          >
+            {extractSortDirection === 'asc' ? 'Asc' : 'Desc'}
+          </button>
+          <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
+            <span>Filas por pagina</span>
+            <select
+              value={extractPageSize}
+              onChange={(e) => {
+                setExtractPageSize(Number(e.target.value));
+                setExtractPage(1);
+              }}
+              className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
+            >
+              {[50, 100, 250, 500, 1000].map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={() => {
+              setExtractSearchTerm('');
+              setExtractColumnFilterKey('all');
+              setExtractPage(1);
+              setExtractPageSize(100);
+              setExtractSortKey(extractMode === 'pagos' ? 'fechaPago' : 'descripcion');
+              setExtractSortDirection('asc');
+              if (extractMode === 'ingresos') {
+                setHiddenIngresoColumns([]);
+              } else {
+                setHiddenPagoColumns([]);
+              }
+            }}
+            className="border border-[#141414]/20 px-3 py-2 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+          >
+            Reset grid
+          </button>
+        </div>
+      </div>
+
+      <div className="border-b border-[#141414]/10 bg-[#E4E3E0] px-4 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-mono uppercase tracking-widest opacity-45">Columnas</span>
+          {extractColumns.map((column) => {
+            const hidden = activeHiddenColumns.includes(column.key);
+            return (
+              <button
+                key={column.key}
+                onClick={() => {
+                  if (extractMode === 'ingresos') {
+                    setHiddenIngresoColumns((current) =>
+                      hidden ? current.filter((key) => key !== column.key) : [...current, column.key]
+                    );
+                  } else {
+                    setHiddenPagoColumns((current) =>
+                      hidden ? current.filter((key) => key !== column.key) : [...current, column.key]
+                    );
+                  }
+                }}
+                className={`px-2.5 py-1 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
+                  hidden
+                    ? 'border-[#141414]/10 text-[#141414]/35 bg-white/50'
+                    : 'border-[#141414]/25 bg-[#141414] text-[#E4E3E0]'
+                }`}
+              >
+                {column.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-auto">
+        {filteredExtractCount > 0 ? (
+          <table className="w-full border-collapse">
+            <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]/10">
+              <tr className="text-left text-[10px] font-mono uppercase opacity-50">
+                {visibleExtractColumns.map((column) => (
+                  <th key={column.key} className="px-3 py-2 font-normal whitespace-nowrap">
+                    {column.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {currentPageRows.map((row, index) => (
+                <tr
+                  key={`${extractMode}-${extractPageStart + index}`}
+                  className="border-b border-[#141414]/10 hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+                >
+                  {visibleExtractColumns.map((column) => (
+                    <td
+                      key={column.key}
+                      className={`px-3 py-2 whitespace-nowrap overflow-hidden text-ellipsis ${
+                        column.key === 'descripcion' ? 'text-[11px] max-w-[320px]' : 'text-[9px] font-mono max-w-[240px]'
+                      }`}
+                    >
+                      {getExtractCellValue(row as Record<string, string>, column.key) || '-'}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="p-16 text-center text-xs font-mono opacity-45">
+            {extractMode === 'ingresos'
+              ? 'No hay registros de ingresos para mostrar con el filtro actual.'
+              : 'No hay registros de pagos para mostrar con el filtro actual.'}
+          </div>
+        )}
+      </div>
+      <div className="p-4 border-t border-[#141414] bg-white/95 backdrop-blur-sm flex items-center justify-between sticky bottom-0">
+        <div className="flex flex-col">
+          <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">
+            Pagina {safeExtractPage} de {extractTotalPages}
+          </p>
+          <p className="text-[10px] font-mono opacity-60 mt-1">
+            {filteredExtractCount === 0
+              ? 'Registros 0 de 0'
+              : `Registros ${extractPageStart + 1}-${Math.min(extractPageStart + currentPageRows.length, filteredExtractCount)} de ${filteredExtractCount}`}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setExtractPage((current) => Math.max(1, current - 1))}
+            disabled={safeExtractPage === 1}
+            className="px-3 py-2 border border-[#141414]/20 text-[10px] font-mono uppercase tracking-widest disabled:opacity-30 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+          >
+            Anterior
+          </button>
+          <button
+            onClick={() => setExtractPage((current) => Math.min(extractTotalPages, current + 1))}
+            disabled={safeExtractPage === extractTotalPages}
+            className="px-3 py-2 border border-[#141414]/20 text-[10px] font-mono uppercase tracking-widest disabled:opacity-30 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+          >
+            Siguiente
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+
+  const renderExtractView = () => (
+    <main className="flex-1 min-h-0 flex overflow-hidden">
+      <aside className="w-80 min-h-0 border-r border-[#141414] flex flex-col bg-[#E4E3E0]">
+        <div className="p-4 border-b border-[#141414]">
+          <p className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-2">Extracción Operativa</p>
+          <div className="border border-[#141414] bg-white/50 p-4">
+            <p className="text-xl font-serif italic">{extractMode === 'ingresos' ? 'Ingresos' : 'Pagos'}</p>
+            <p className="text-[11px] font-mono leading-relaxed mt-3 opacity-75">
+              {extractMode === 'ingresos'
+                ? 'Lectura tabular por concepto e impuesto, pensada para explotación masiva y exportación CSV.'
+                : 'Lectura tabular por pago, documento relacionado e impuestos DR, pensada para explotación masiva y exportación CSV.'}
+            </p>
+            <div className="mt-3 flex items-center gap-2">
+              <span className="inline-flex items-center gap-2 px-2 py-1 text-[10px] font-mono uppercase tracking-widest bg-[#141414] text-[#E4E3E0]">
+                <Sparkles size={11} />
+                Perfil detectado: {getProfileLabel(profile)}
+              </span>
+            </div>
+            <p className="text-[10px] font-mono uppercase tracking-widest opacity-50 mt-3">
+              {getProfileRecommendation(profile)}
+            </p>
+          </div>
+        </div>
+
+        <div className="p-4 border-b border-[#141414] flex items-center justify-between">
+          <h2 className="text-xs font-mono uppercase tracking-widest opacity-50">Modo</h2>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-[#141414] text-[#E4E3E0]">
+            CSV
+          </span>
+        </div>
+
+        <div className="p-4 space-y-3">
+          <button
+            onClick={() => {
+              setExtractMode('ingresos');
+              setExtractPage(1);
+              setExtractColumnFilterKey('all');
+              setExtractSortKey('descripcion');
+              setExtractSortDirection('asc');
+            }}
+            className={`w-full text-left px-3 py-3 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
+              extractMode === 'ingresos'
+                ? 'bg-[#141414] text-[#E4E3E0] border-[#141414]'
+                : 'border-[#141414]/20 bg-white/35 hover:border-[#141414]'
+            }`}
+          >
+            Ingresos
+          </button>
+          <button
+            onClick={() => {
+              setExtractMode('pagos');
+              setExtractPage(1);
+              setExtractColumnFilterKey('all');
+              setExtractSortKey('fechaPago');
+              setExtractSortDirection('asc');
+            }}
+            className={`w-full text-left px-3 py-3 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
+              extractMode === 'pagos'
+                ? 'bg-[#141414] text-[#E4E3E0] border-[#141414]'
+                : 'border-[#141414]/20 bg-white/35 hover:border-[#141414]'
+            }`}
+          >
+            Pagos
+          </button>
+        </div>
+
+        <div className="mt-auto p-4 border-t border-[#141414] bg-[#141414]/5">
+          <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-3">Salida</h3>
+          <div className="space-y-2 text-[11px] font-mono">
+            <div className="flex justify-between">
+              <span>Tipo</span>
+              <span>{extractMode === 'ingresos' ? 'Concepto + impuesto' : 'DoctoRel + impuesto DR'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Formato</span>
+              <span>CSV</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {renderExtractWorkspace()}
+    </main>
+  );
 
   if (!cfdi) {
     return (
@@ -172,78 +1010,94 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
             <h1 className="text-4xl font-serif italic mb-2 text-[#141414]">CFDI Inspector</h1>
             <p className="text-[#141414]/60 font-mono text-sm uppercase tracking-widest">Auditoría y Validación de Facturas XML</p>
           </div>
-          <FileUpload onFileSelect={handleFileSelect} />
+          <FileUpload
+            onFileSelect={handleFileSelect}
+            analysisLabel={analysisStageLabel}
+            analysisProgress={analysisStageProgress}
+            analysisDetail={analysisStageDetail}
+            analysisEngine={analysisEngine}
+            analysisReason={analysisReason}
+          />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#E4E3E0] text-[#141414] font-sans flex flex-col">
+    <div className="h-screen bg-[#E4E3E0] text-[#141414] font-sans flex flex-col">
       {/* Header */}
-      <header className="border-b border-[#141414] p-4 flex items-center justify-between sticky top-0 bg-[#E4E3E0] z-10">
-        <div className="flex items-center gap-4">
+      <header className="border-b border-[#141414] sticky top-0 bg-[#E4E3E0] z-10">
+        <div className="px-4 py-3 flex items-start justify-between gap-6">
+        <div className="flex items-start gap-4 min-w-0">
           <button 
-            onClick={() => setCfdi(null)}
-            className="p-2 hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors rounded-full"
+            onClick={() => {
+              setCfdi(null);
+              setIngresoRows([]);
+              setPagoRows([]);
+              setSourceXml('');
+              setProfile('unknown');
+              setAnalysisEngine('idle');
+              setAnalysisReason('');
+              setAnalysisStageLabel('Analizando estructura CFDI');
+              setAnalysisStageProgress(100);
+              setAnalysisStageDetail('');
+              setExtractMode('ingresos');
+              setExtractSearchTerm('');
+              setDiagnoseSearchTerm('');
+              setDiagnosePage(1);
+              setDiagnosePageSize(100);
+              setDiagnoseSortKey('diferencia');
+              setDiagnoseSortDirection('desc');
+              setHiddenDiagnoseColumns([]);
+            }}
+            className="w-10 h-10 mt-0.5 shrink-0 border border-[#141414] bg-[#E4E3E0] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors rounded-full flex items-center justify-center"
           >
             <ArrowLeft size={20} />
           </button>
-          <div>
-            <h1 className="text-xl font-serif italic">CFDI Inspector</h1>
-            <p className="text-[10px] font-mono opacity-50 uppercase tracking-tighter">v1.0.0 // Internal Tool</p>
+          <div className="flex items-start gap-8 min-w-0">
+            <div className="mt-1 flex items-baseline gap-3 min-w-0">
+              <div className="flex flex-col min-w-0">
+                <div className="mt-1 flex items-baseline gap-3 min-w-0">
+                  <h1 className="text-[28px] leading-none font-serif italic whitespace-nowrap">CFDI Inspector</h1>
+                </div>
+                <div className="mt-3 flex items-center gap-4 min-w-0">
+                  <p className="text-[10px] font-mono opacity-45 uppercase tracking-[0.18em]">v1.0.0 // Internal Tool</p>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-col min-w-0">
+              <div className="mt-1 flex items-baseline gap-3 min-w-0">
+                <h2 className="text-[18px] leading-none font-serif italic text-[#141414]/70 truncate">{getProfileLabel(profile)}</h2>
+              </div>
+              <p className="mt-3 text-[10px] font-mono opacity-55 uppercase tracking-[0.14em] truncate">
+                {cfdi.uuid ? `UUID ${cfdi.uuid}` : 'UUID no detectado'}
+              </p>
+            </div>
           </div>
         </div>
         
-        <div className="flex items-center gap-6">
-          <div className="flex flex-col items-end">
-            <span className="text-[10px] font-mono opacity-50 uppercase">UUID</span>
-            <span className="text-xs font-mono font-bold tracking-tighter">{cfdi.uuid}</span>
-          </div>
-          <button
-            onClick={copyDiagnostic}
-            className={`border px-3 py-2 text-[10px] font-mono uppercase tracking-widest transition-colors flex items-center gap-2 ${
-              copiedDiagnostic
-                ? 'border-[#141414] bg-[#141414] text-[#E4E3E0]'
-                : 'border-[#141414]/20 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0]'
-            }`}
-          >
-            <Copy size={12} />
-            {copiedDiagnostic ? 'Copiado' : 'Copiar diagnóstico'}
-          </button>
+        <div className="flex items-center gap-3 shrink-0">
           <button 
-            onClick={exportReport}
-            className={`px-4 py-2 text-xs font-mono uppercase tracking-widest transition-opacity flex items-center gap-2 ${
-              reportExported
+            onClick={exportCurrentTable}
+            className={`px-5 py-3 text-[10px] font-mono uppercase tracking-[0.22em] transition-opacity flex items-center gap-2 ${
+              tableExported
                 ? 'bg-green-700 text-[#E4E3E0]'
-                : 'bg-[#141414] text-[#E4E3E0] hover:opacity-80'
+                : tableExportError
+                  ? 'bg-red-700 text-[#E4E3E0]'
+                  : 'bg-[#141414] text-[#E4E3E0] hover:opacity-80'
             }`}
           >
-            <Download size={14} />
-            {reportExported ? 'Reporte descargado' : 'Exportar Reporte'}
+            <FileText size={14} />
+            {tableExported ? 'Exportado' : tableExportError ? 'Sin datos' : 'Exportar'}
           </button>
+        </div>
         </div>
       </header>
 
-      <main className="flex-1 flex overflow-hidden">
+      {profile === 'pagos' ? renderExtractView() : (
+      <main className="flex-1 min-h-0 flex overflow-hidden">
         {/* Sidebar Hallazgos */}
-        <aside className="w-80 border-r border-[#141414] flex flex-col bg-[#E4E3E0]">
-          <div className="p-4 border-b border-[#141414]">
-            <p className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-2">Dictamen</p>
-            <div
-              className={`p-3 border rounded ${
-                cfdi.verdict.status === 'critical'
-                  ? 'border-red-500/30 bg-red-50'
-                  : cfdi.verdict.status === 'review'
-                    ? 'border-amber-500/30 bg-amber-50'
-                    : 'border-green-500/30 bg-green-50'
-              }`}
-            >
-              <p className="text-sm font-semibold">{cfdi.verdict.title}</p>
-              <p className="text-[11px] font-mono leading-relaxed mt-2 opacity-80">{cfdi.verdict.summary}</p>
-            </div>
-          </div>
-
+        <aside className="w-80 min-h-0 border-r border-[#141414] flex flex-col bg-[#E4E3E0]">
           <div className="p-4 border-b border-[#141414] flex items-center justify-between">
             <h2 className="text-xs font-mono uppercase tracking-widest opacity-50">Hallazgos</h2>
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${cfdi.findings.length > 0 ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
@@ -320,30 +1174,24 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
         </aside>
 
         {/* Content Area */}
-        <section className="flex-1 flex flex-col overflow-hidden relative">
+        <section className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
           {/* Info Cards */}
           <div className="grid grid-cols-3 border-b border-[#141414]">
-            <div className="p-4 border-r border-[#141414] flex items-start gap-3">
-              <User size={16} className="opacity-50 mt-1" />
-              <div>
-                <p className="text-[10px] font-mono uppercase opacity-50">Emisor</p>
-                <p className="text-xs font-bold truncate max-w-[200px]">{cfdi.emisor}</p>
-              </div>
-            </div>
-            <div className="p-4 border-r border-[#141414] flex items-start gap-3">
-              <Database size={16} className="opacity-50 mt-1" />
-              <div>
-                <p className="text-[10px] font-mono uppercase opacity-50">Receptor</p>
-                <p className="text-xs font-bold truncate max-w-[200px]">{cfdi.receptor}</p>
-              </div>
-            </div>
-            <div className="p-4 flex items-start gap-3">
-              <Calendar size={16} className="opacity-50 mt-1" />
-              <div>
-                <p className="text-[10px] font-mono uppercase opacity-50">Fecha Timbrado</p>
-                <p className="text-xs font-bold">{new Date(cfdi.fecha).toLocaleString()}</p>
-              </div>
-            </div>
+            {summaryFields.map((field, index) => {
+              const Icon = field.icon;
+              return (
+                <div
+                  key={field.key}
+                  className={`p-4 flex items-start gap-3 ${index < summaryFields.length - 1 ? 'border-r border-[#141414]' : ''}`}
+                >
+                  <Icon size={16} className="opacity-50 mt-1" />
+                  <div>
+                    <p className="text-[10px] font-mono uppercase opacity-50">{field.label}</p>
+                    <p className="text-xs font-bold truncate max-w-[200px]">{field.value}</p>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           <div className="border-b border-[#141414] bg-[#141414]/[0.03]">
@@ -356,17 +1204,6 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                 <span className="text-[10px] font-mono uppercase opacity-50">
                   {cfdi.taxAuditGroups.filter((group) => Math.abs(group.diferencia) !== 0).length} diferencias
                 </span>
-                <button
-                  onClick={exportTaxBreakdown}
-                  className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-widest transition-colors flex items-center gap-2 border ${
-                    taxesExported
-                      ? 'bg-green-700 text-[#E4E3E0] border-green-700'
-                      : 'border-[#141414]/20 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0]'
-                  }`}
-                >
-                  <FileText size={12} />
-                  {taxesExported ? 'CSV descargado' : 'Exportar desglose'}
-                </button>
               </div>
             </div>
             <div className="overflow-auto max-h-36 border-t border-[#141414]/10 bg-white/15">
@@ -399,28 +1236,146 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
             </div>
           </div>
 
+          <div className="grid grid-cols-4 border-b border-[#141414] bg-[#141414]/[0.03]">
+            <div className="p-3 border-r border-[#141414]/10">
+              <p className="text-[10px] font-mono uppercase opacity-50">Registros</p>
+              <p className="text-lg font-serif italic mt-1">{filteredDiagnoseCount.toLocaleString('es-MX')}</p>
+            </div>
+            <div className="p-3 border-r border-[#141414]/10">
+              <p className="text-[10px] font-mono uppercase opacity-50">Modo</p>
+              <p className="text-lg font-serif italic mt-1">{onlyImpacted ? 'Discrepancias' : 'Todos'}</p>
+            </div>
+            <div className="p-3 border-r border-[#141414]/10">
+              <p className="text-[10px] font-mono uppercase opacity-50">Orden</p>
+              <p className="text-lg font-serif italic mt-1">{diagnoseSortDirection === 'asc' ? 'Asc' : 'Desc'}</p>
+            </div>
+            <div className="p-3">
+              <p className="text-[10px] font-mono uppercase opacity-50">Resultados</p>
+              <p className="text-lg font-serif italic mt-1">{diagnoseSearchTerm ? 'Filtrados' : 'Todos'}</p>
+            </div>
+          </div>
+
           {/* Search & Filters */}
           <div className="p-4 border-b border-[#141414] flex items-center justify-between bg-white/50">
-            <div className="relative w-96">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" />
-              <input 
-                type="text" 
-                placeholder="Filtrar conceptos por descripción o clave..."
-                className="w-full pl-9 pr-4 py-2 text-xs font-mono bg-transparent border border-[#141414]/20 focus:border-[#141414] outline-none transition-colors"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-            <div className="flex items-center gap-4 text-[10px] font-mono uppercase opacity-50">
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
+                <span>Buscar en</span>
+                <select
+                  value={diagnoseColumnFilterKey}
+                  onChange={(e) => {
+                    setDiagnoseColumnFilterKey(e.target.value);
+                    setDiagnosePage(1);
+                  }}
+                  className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
+                >
+                  <option value="all">Todas</option>
+                  {DIAGNOSE_COLUMNS.map((column) => (
+                    <option key={column.key} value={column.key}>
+                      {column.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="relative w-96">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 opacity-30" />
+                <input 
+                  type="text" 
+                  placeholder={`Buscar en ${diagnoseColumnFilterKey === 'all' ? 'todas las columnas' : DIAGNOSE_COLUMNS.find((column) => column.key === diagnoseColumnFilterKey)?.label ?? 'columna'}...`}
+                  className="w-full pl-9 pr-4 py-2 text-xs font-mono bg-transparent border border-[#141414]/20 focus:border-[#141414] outline-none transition-colors"
+                  value={diagnoseSearchTerm}
+                  onChange={(e) => {
+                    setDiagnoseSearchTerm(e.target.value);
+                    setDiagnosePage(1);
+                  }}
+                />
+              </div>
+              <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
+                <span>Ordenar por</span>
+                <select
+                  value={diagnoseSortKey}
+                  onChange={(e) => {
+                    setDiagnoseSortKey(e.target.value);
+                    setDiagnosePage(1);
+                  }}
+                  className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
+                >
+                  <option value="diferencia">Dif.</option>
+                  <option value="descripcion">Descripcion</option>
+                  <option value="claveProdServ">Clave</option>
+                  <option value="cantidad">Cantidad</option>
+                  <option value="valorUnitario">V. Unitario</option>
+                  <option value="importe">Importe XML</option>
+                  <option value="importeCalculado">Importe Calc.</option>
+                </select>
+              </label>
               <button
-                onClick={() => setOnlyImpacted((value) => !value)}
-                className={`px-3 py-2 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
-                  onlyImpacted ? 'bg-[#141414] text-[#E4E3E0] border-[#141414]' : 'border-[#141414]/20 hover:border-[#141414]'
-                }`}
+                onClick={() => {
+                  setDiagnoseSortDirection((current) => current === 'asc' ? 'desc' : 'asc');
+                  setDiagnosePage(1);
+                }}
+                className="border border-[#141414]/20 px-3 py-2 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
               >
-                {onlyImpacted ? 'Solo discrepancias' : 'Todos los conceptos'}
+                {diagnoseSortDirection === 'asc' ? 'Asc' : 'Desc'}
               </button>
-              <span>{onlyImpacted ? 'Conceptos afectados' : 'Conceptos revisados'}: {filteredConceptos.length}</span>
+              <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest opacity-70">
+                <span>Filas por pagina</span>
+                <select
+                  value={diagnosePageSize}
+                  onChange={(e) => {
+                    setDiagnosePageSize(Number(e.target.value));
+                    setDiagnosePage(1);
+                  }}
+                  className="border border-[#141414]/20 bg-transparent px-2 py-2 text-[10px] font-mono"
+                >
+                  {[50, 100, 250, 500, 1000].map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                onClick={() => {
+                  setDiagnoseSearchTerm('');
+                  setDiagnoseColumnFilterKey('all');
+                  setDiagnosePage(1);
+                  setDiagnosePageSize(100);
+                  setDiagnoseSortKey('diferencia');
+                  setDiagnoseSortDirection('desc');
+                  setOnlyImpacted(true);
+                  setHiddenDiagnoseColumns([]);
+                }}
+                className="border border-[#141414]/20 px-3 py-2 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+              >
+                Reset grid
+              </button>
+            </div>
+            <div />
+          </div>
+
+          <div className="border-b border-[#141414]/10 bg-[#E4E3E0] px-4 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-mono uppercase tracking-widest opacity-45">Columnas</span>
+              {DIAGNOSE_COLUMNS.map((column) => {
+                const hidden = hiddenDiagnoseColumns.includes(column.key);
+                return (
+                  <button
+                    key={column.key}
+                    onClick={() =>
+                      setHiddenDiagnoseColumns((current) =>
+                        hidden ? current.filter((key) => key !== column.key) : [...current, column.key]
+                      )
+                    }
+                    className={`px-2.5 py-1 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
+                      hidden
+                        ? 'border-[#141414]/10 text-[#141414]/35 bg-white/50'
+                        : 'border-[#141414]/25 bg-[#141414] text-[#E4E3E0]'
+                    }`}
+                  >
+                    {column.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -429,48 +1384,106 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
             <table className="w-full border-collapse">
               <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]">
                 <tr className="text-[10px] font-mono uppercase opacity-50 text-left">
-                  <th className="p-4 font-normal">Clave</th>
-                  <th className="p-4 font-normal">Descripción</th>
-                  <th className="p-4 font-normal text-right">Cant.</th>
-                  <th className="p-4 font-normal text-right">V. Unitario</th>
-                  <th className="p-4 font-normal text-right">Importe XML</th>
-                  <th className="p-4 font-normal text-right">Importe Calc.</th>
-                  <th className="p-4 font-normal text-right">Dif.</th>
-                  <th className="p-4 font-normal text-center">Status</th>
+                  {visibleDiagnoseColumns.map((column) => (
+                    <th
+                      key={column.key}
+                      className={`px-3 py-2 font-normal ${
+                        column.key === 'descripcion'
+                          ? ''
+                          : column.key === 'status'
+                            ? 'text-center'
+                            : ['cantidad', 'valorUnitario', 'importe', 'importeCalculado', 'diferencia'].includes(column.key)
+                              ? 'text-right'
+                              : ''
+                      }`}
+                    >
+                      {column.label}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#141414]/10">
-                {filteredConceptos.map((c, i) => (
+                {currentDiagnoseRows.map((c, i) => (
                   <motion.tr 
-                    key={i}
+                    key={`${c.claveProdServ}-${c.descripcion}-${diagnosePageStart + i}`}
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
-                    transition={{ delay: i * 0.05 }}
+                    transition={{ delay: i < 6 ? i * 0.03 : 0 }}
                     onClick={() => setSelectedConcept(c)}
                     className="group hover:bg-[#141414] hover:text-[#E4E3E0] transition-all cursor-pointer"
                   >
-                    <td className="p-4 text-[10px] font-mono">{c.claveProdServ}</td>
-                    <td className="p-4 text-xs font-medium max-w-xs truncate">{c.descripcion}</td>
-                    <td className="p-4 text-xs font-mono text-right">{c.cantidad}</td>
-                    <td className="p-4 text-xs font-mono text-right">${c.valorUnitario.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
-                    <td className="p-4 text-xs font-mono text-right">${c.importe.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>
-                    <td className="p-4 text-xs font-mono text-right italic opacity-70">
-                      ${c.importeCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-                    </td>
-                    <td className={`p-4 text-xs font-mono text-right ${c.diferencia !== 0 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
-                      ${formatExact(c.diferencia)}
-                    </td>
-                    <td className="p-4 text-center">
-                      {c.diferencia !== 0 ? (
-                        <AlertTriangle size={14} className="text-red-500 mx-auto" />
-                      ) : (
-                        <CheckCircle2 size={14} className="text-green-500 mx-auto opacity-30 group-hover:opacity-100" />
-                      )}
-                    </td>
+                    {visibleDiagnoseColumns.map((column) => {
+                      if (column.key === 'claveProdServ') {
+                        return <td key={column.key} className="px-3 py-2 text-[9px] font-mono whitespace-nowrap">{c.claveProdServ}</td>;
+                      }
+                      if (column.key === 'descripcion') {
+                        return <td key={column.key} className="px-3 py-2 text-[11px] font-medium max-w-xs truncate">{c.descripcion}</td>;
+                      }
+                      if (column.key === 'cantidad') {
+                        return <td key={column.key} className="px-3 py-2 text-[10px] font-mono text-right whitespace-nowrap">{c.cantidad}</td>;
+                      }
+                      if (column.key === 'valorUnitario') {
+                        return <td key={column.key} className="px-3 py-2 text-[10px] font-mono text-right whitespace-nowrap">${c.valorUnitario.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>;
+                      }
+                      if (column.key === 'importe') {
+                        return <td key={column.key} className="px-3 py-2 text-[10px] font-mono text-right whitespace-nowrap">${c.importe.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</td>;
+                      }
+                      if (column.key === 'importeCalculado') {
+                        return (
+                          <td key={column.key} className="px-3 py-2 text-[10px] font-mono text-right italic opacity-70 whitespace-nowrap">
+                            ${c.importeCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                          </td>
+                        );
+                      }
+                      if (column.key === 'diferencia') {
+                        return (
+                          <td key={column.key} className={`px-3 py-2 text-[10px] font-mono text-right whitespace-nowrap ${c.diferencia !== 0 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
+                            ${formatExact(c.diferencia)}
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={column.key} className="px-3 py-2 text-center">
+                          {c.diferencia !== 0 ? (
+                            <AlertTriangle size={14} className="text-red-500 mx-auto" />
+                          ) : (
+                            <CheckCircle2 size={14} className="text-green-500 mx-auto opacity-30 group-hover:opacity-100" />
+                          )}
+                        </td>
+                      );
+                    })}
                   </motion.tr>
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="p-4 border-t border-[#141414] bg-white/95 backdrop-blur-sm flex items-center justify-between">
+            <div className="flex flex-col">
+              <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">
+                Pagina {safeDiagnosePage} de {diagnoseTotalPages}
+              </p>
+              <p className="text-[10px] font-mono opacity-60 mt-1">
+                {filteredDiagnoseCount === 0
+                  ? 'Registros 0 de 0'
+                  : `Registros ${diagnosePageStart + 1}-${Math.min(diagnosePageStart + currentDiagnoseRows.length, filteredDiagnoseCount)} de ${filteredDiagnoseCount}`}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setDiagnosePage((current) => Math.max(1, current - 1))}
+                disabled={safeDiagnosePage === 1}
+                className="px-3 py-2 border border-[#141414]/20 text-[10px] font-mono uppercase tracking-widest disabled:opacity-30 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+              >
+                Anterior
+              </button>
+              <button
+                onClick={() => setDiagnosePage((current) => Math.min(diagnoseTotalPages, current + 1))}
+                disabled={safeDiagnosePage === diagnoseTotalPages}
+                className="px-3 py-2 border border-[#141414]/20 text-[10px] font-mono uppercase tracking-widest disabled:opacity-30 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors"
+              >
+                Siguiente
+              </button>
+            </div>
           </div>
 
           {/* Concept Detail Modal */}
@@ -569,6 +1582,7 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
           </AnimatePresence>
         </section>
       </main>
+      )}
     </div>
   );
 }
