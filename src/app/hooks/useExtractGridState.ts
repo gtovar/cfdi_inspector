@@ -157,9 +157,7 @@ export function useExtractGridState(params: {
   const extractTotalPages = Math.max(1, table.getPageCount());
   const safeExtractPage = Math.min(extractPage, extractTotalPages);
   const extractPageStart = filteredExtractCount === 0 ? 0 : (safeExtractPage - 1) * extractPageSize;
-  const currentPageRows = table.getRowModel().rows.map((row) => row.original);
   const selectedRowCount = table.getSelectedRowModel().rows.length;
-  const allPageRowsSelected = table.getIsAllPageRowsSelected();
 
   useEffect(() => {
     if (extractPage > extractTotalPages) {
@@ -291,7 +289,6 @@ export function useExtractGridState(params: {
   const extractGrid: ExtractGridController = {
     extractColumns,
     activeHiddenColumns,
-    columnOrder,
     columnFilters,
     extractColumnFilterKey,
     extractSearchTerm,
@@ -302,7 +299,6 @@ export function useExtractGridState(params: {
     extractTotalPages,
     extractPageStart,
     selectedRowCount,
-    allPageRowsSelected,
     table,
     setColumnFilterKey: (value) => {
       setExtractColumnFilterKey(value);
@@ -311,18 +307,6 @@ export function useExtractGridState(params: {
     setColumnFilterValue,
     setSearchTerm: (value) => {
       setExtractSearchTerm(value);
-      setExtractPageState(1);
-    },
-    setSorting: (value) => {
-      setSortingState(value);
-      setExtractPageState(1);
-    },
-    setSortKey: (value) => {
-      setExtractSortKey(value);
-      setExtractPageState(1);
-    },
-    toggleSortDirection: () => {
-      setExtractSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
       setExtractPageState(1);
     },
     setPageSize: (value) => {
@@ -340,32 +324,8 @@ export function useExtractGridState(params: {
   return {
     extractGrid,
     extractSearchTerm,
-    setExtractSearchTerm,
-    extractColumnFilterKey,
-    setExtractColumnFilterKey,
-    extractPage,
-    setExtractPage,
-    extractPageSize,
-    setExtractPageSize,
-    extractSortKey: sorting[0]?.id ?? '',
-    setExtractSortKey,
-    extractSortDirection: sorting[0]?.desc ? 'desc' : 'asc',
-    setExtractSortDirection,
-    hiddenIngresoColumns,
-    hiddenPagoColumns,
-    activeHiddenColumns,
-    visibleExtractColumns,
     filteredExtractRows,
-    sortedExtractRows,
-    filteredExtractCount,
-    extractTotalPages,
-    safeExtractPage,
-    extractPageStart,
-    currentPageRows,
-    getExtractCellValue,
     resetForNewAnalysis,
-    resetGrid,
-    toggleColumn,
     resetAll,
   };
 }

@@ -11,7 +11,6 @@ export type ExtractSortDirection = 'asc' | 'desc';
 export interface ExtractGridController {
   extractColumns: readonly ExtractColumn[];
   activeHiddenColumns: string[];
-  columnOrder: string[];
   columnFilters: ColumnFiltersState;
   extractColumnFilterKey: string;
   extractSearchTerm: string;
@@ -22,14 +21,10 @@ export interface ExtractGridController {
   extractTotalPages: number;
   extractPageStart: number;
   selectedRowCount: number;
-  allPageRowsSelected: boolean;
   table: Table<Record<string, string>>;
   setColumnFilterKey: (value: string) => void;
   setColumnFilterValue: (columnKey: string, value: string) => void;
   setSearchTerm: (value: string) => void;
-  setSorting: (value: SortingState) => void;
-  setSortKey: (value: string) => void;
-  toggleSortDirection: () => void;
   setPageSize: (value: number) => void;
   resetGrid: () => void;
   toggleColumn: (columnKey: string, hidden: boolean) => void;

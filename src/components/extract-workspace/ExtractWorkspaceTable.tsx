@@ -11,7 +11,7 @@ interface ExtractWorkspaceTableProps {
 }
 
 export default function ExtractWorkspaceTable({ activeDatasetType, grid }: ExtractWorkspaceTableProps) {
-  const { filteredExtractCount, table, setColumnFilterValue, setSorting, toggleAllPageRowsSelected } = grid;
+  const { filteredExtractCount, table, setColumnFilterValue, toggleAllPageRowsSelected } = grid;
   const visibleColumns = table.getVisibleLeafColumns();
   const rows = table.getRowModel().rows;
   const [scrollTop, setScrollTop] = useState(0);
