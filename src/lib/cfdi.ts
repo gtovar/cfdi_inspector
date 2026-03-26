@@ -25,6 +25,24 @@ export interface CFDIImpuesto {
   diferencia: number;
 }
 
+export interface AuditFinding {
+  id: string;
+  severity: 'critical' | 'warning';
+  title: string;
+  summary: string;
+}
+
+export interface TaxAuditGroup {
+  key: string;
+  impuesto: string;
+  tipoFactor: string;
+  tasaOCuota: number;
+  importeDetalle: number;
+  importeAgrupado: number;
+  diferencia: number;
+  conceptos: number[];
+}
+
 export interface CFDIData {
   version: string;
   fecha: string;
@@ -39,6 +57,15 @@ export interface CFDIData {
   subtotalCalculado: number;
   totalCalculado: number;
   hallazgos: string[];
+  findings: AuditFinding[];
+  impactedConceptIndexes: number[];
+  taxAuditGroups: TaxAuditGroup[];
+  verdict: {
+    status: 'clean' | 'review' | 'critical';
+    title: string;
+    summary: string;
+  };
+  supportText: string;
 }
 
 export function parseCFDI(xmlString: string): CFDIData {
@@ -71,7 +98,16 @@ export function parseCFDI(xmlString: string): CFDIData {
     impuestosGlobales: [],
     subtotalCalculado: 0,
     totalCalculado: 0,
-    hallazgos: []
+    hallazgos: [],
+    findings: [],
+    impactedConceptIndexes: [],
+    taxAuditGroups: [],
+    verdict: {
+      status: 'clean',
+      title: 'Sin discrepancias detectadas',
+      summary: 'Los importes principales cuadran con el cálculo actual.',
+    },
+    supportText: ''
   };
 
   // Parse Conceptos
@@ -146,15 +182,166 @@ export function parseCFDI(xmlString: string): CFDIData {
 
   // Validaciones Finales
   if (Math.abs(data.subtotalCalculado - data.subtotal) > 0.01) {
-    data.hallazgos.push(`Discrepancia en Subtotal: XML declara ${data.subtotal}, suma de conceptos da ${data.subtotalCalculado.toFixed(2)}`);
+    const summary = `XML declara ${data.subtotal.toFixed(2)} y la suma de conceptos da ${data.subtotalCalculado.toFixed(2)}.`;
+    data.hallazgos.push(`Discrepancia en Subtotal: ${summary}`);
+    data.findings.push({
+      id: 'subtotal',
+      severity: 'critical',
+      title: 'Discrepancia en subtotal',
+      summary,
+    });
   }
 
   const sumaTraslados = data.impuestosGlobales.reduce((acc, curr) => acc + curr.importe, 0);
   data.totalCalculado = data.subtotal - data.descuento + sumaTraslados;
 
   if (Math.abs(data.totalCalculado - data.total) > 0.01) {
-    data.hallazgos.push(`Discrepancia en Total: XML declara ${data.total}, cálculo manual da ${data.totalCalculado.toFixed(2)}`);
+    const summary = `XML declara ${data.total.toFixed(2)} y el cálculo manual da ${data.totalCalculado.toFixed(2)}.`;
+    data.hallazgos.push(`Discrepancia en Total: ${summary}`);
+    data.findings.push({
+      id: 'total',
+      severity: 'critical',
+      title: 'Discrepancia en total',
+      summary,
+    });
   }
+
+  const conceptWarnings = data.conceptos
+    .map((concepto, index) => ({ concepto, index }))
+    .filter(({ concepto }) => concepto.diferencia > 0.000001)
+    .sort((a, b) => b.concepto.diferencia - a.concepto.diferencia)
+    .slice(0, 3);
+
+  conceptWarnings.forEach(({ concepto, index }) => {
+    const summary = `${concepto.descripcion}: XML ${concepto.importe.toFixed(2)} vs cálculo ${concepto.importeCalculado.toFixed(2)}.`;
+    data.findings.push({
+      id: `concept-${index}`,
+      severity: concepto.diferencia > 0.01 ? 'critical' : 'warning',
+      title: `Importe inconsistente en concepto ${index + 1}`,
+      summary,
+    });
+    if (!data.impactedConceptIndexes.includes(index)) {
+      data.impactedConceptIndexes.push(index);
+    }
+  });
+
+  const taxWarnings = data.conceptos
+    .flatMap((concepto, conceptIndex) =>
+      concepto.impuestos.map((impuesto, taxIndex) => ({ concepto, impuesto, conceptIndex, taxIndex }))
+    )
+    .filter(({ impuesto }) => impuesto.diferencia > 0.000001)
+    .sort((a, b) => b.impuesto.diferencia - a.impuesto.diferencia)
+    .slice(0, 3);
+
+  taxWarnings.forEach(({ concepto, impuesto, conceptIndex, taxIndex }) => {
+    const summary = `${concepto.descripcion}: traslado ${impuesto.impuesto} XML ${impuesto.importe.toFixed(2)} vs cálculo ${impuesto.importeCalculado.toFixed(2)}.`;
+    data.findings.push({
+      id: `tax-${conceptIndex}-${taxIndex}`,
+      severity: impuesto.diferencia > 0.01 ? 'critical' : 'warning',
+      title: `Traslado inconsistente en concepto ${conceptIndex + 1}`,
+      summary,
+    });
+    if (!data.impactedConceptIndexes.includes(conceptIndex)) {
+      data.impactedConceptIndexes.push(conceptIndex);
+    }
+  });
+
+  data.impactedConceptIndexes.sort((a, b) => a - b);
+
+  const taxGroupMap = new Map<string, TaxAuditGroup>();
+
+  data.conceptos.forEach((concepto, conceptIndex) => {
+    concepto.impuestos.forEach((impuesto) => {
+      const key = `${impuesto.impuesto}|${impuesto.tipoFactor}|${impuesto.tasaOCuota}`;
+      const current = taxGroupMap.get(key) ?? {
+        key,
+        impuesto: impuesto.impuesto,
+        tipoFactor: impuesto.tipoFactor,
+        tasaOCuota: impuesto.tasaOCuota,
+        importeDetalle: 0,
+        importeAgrupado: 0,
+        diferencia: 0,
+        conceptos: [],
+      };
+
+      current.importeDetalle += impuesto.importe;
+      if (!current.conceptos.includes(conceptIndex)) {
+        current.conceptos.push(conceptIndex);
+      }
+      taxGroupMap.set(key, current);
+    });
+  });
+
+  data.impuestosGlobales.forEach((impuesto) => {
+    const key = `${impuesto.impuesto}|${impuesto.tipoFactor}|${impuesto.tasaOCuota}`;
+    const current = taxGroupMap.get(key) ?? {
+      key,
+      impuesto: impuesto.impuesto,
+      tipoFactor: impuesto.tipoFactor,
+      tasaOCuota: impuesto.tasaOCuota,
+      importeDetalle: 0,
+      importeAgrupado: 0,
+      diferencia: 0,
+      conceptos: [],
+    };
+
+    current.importeAgrupado += impuesto.importe;
+    taxGroupMap.set(key, current);
+  });
+
+  data.taxAuditGroups = Array.from(taxGroupMap.values())
+    .map((group) => ({
+      ...group,
+      diferencia: group.importeAgrupado - group.importeDetalle,
+    }))
+    .sort((a, b) => Math.abs(b.diferencia) - Math.abs(a.diferencia));
+
+  data.taxAuditGroups
+    .filter((group) => Math.abs(group.diferencia) > 0.000001)
+    .slice(0, 3)
+    .forEach((group) => {
+      data.findings.push({
+        id: `tax-group-${group.key}`,
+        severity: Math.abs(group.diferencia) > 0.01 ? 'critical' : 'warning',
+        title: `Diferencia en traslado ${group.impuesto} ${(group.tasaOCuota * 100).toFixed(2)}%`,
+        summary: `Detalle ${group.importeDetalle.toFixed(2)} vs agrupado ${group.importeAgrupado.toFixed(2)}.`,
+      });
+
+      group.conceptos.forEach((index) => {
+        if (!data.impactedConceptIndexes.includes(index)) {
+          data.impactedConceptIndexes.push(index);
+        }
+      });
+    });
+
+  data.impactedConceptIndexes.sort((a, b) => a - b);
+
+  if (data.findings.length === 0 && data.hallazgos.length === 0) {
+    data.hallazgos = [];
+  }
+
+  const criticalFindings = data.findings.filter((finding) => finding.severity === 'critical').length;
+  const warningFindings = data.findings.filter((finding) => finding.severity === 'warning').length;
+
+  if (criticalFindings > 0) {
+    data.verdict = {
+      status: 'critical',
+      title: 'CFDI con discrepancias críticas',
+      summary: `Se detectaron ${criticalFindings} hallazgo(s) críticos que requieren revisión operativa.`,
+    };
+  } else if (warningFindings > 0) {
+    data.verdict = {
+      status: 'review',
+      title: 'CFDI requiere revisión',
+      summary: `Hay ${warningFindings} alerta(s) menores, probablemente asociadas a redondeo o captura.`,
+    };
+  }
+
+  data.supportText = [
+    data.verdict.title,
+    data.verdict.summary,
+    ...data.findings.slice(0, 5).map((finding) => `${finding.title}: ${finding.summary}`),
+  ].join('\n');
 
   return data;
 }

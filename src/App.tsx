@@ -12,6 +12,7 @@ import {
   Search, 
   Download, 
   ArrowLeft,
+  Copy,
   Info,
   ChevronRight,
   Database,
@@ -26,6 +27,7 @@ import FileUpload from './components/FileUpload';
 export default function App() {
   const [cfdi, setCfdi] = useState<CFDIData | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [onlyImpacted, setOnlyImpacted] = useState(true);
   const [selectedConcept, setSelectedConcept] = useState<CFDIConcept | null>(null);
 
   const handleFileSelect = (xml: string) => {
@@ -48,6 +50,10 @@ Fecha: ${cfdi.fecha}
 Emisor: ${cfdi.emisor}
 Receptor: ${cfdi.receptor}
 
+DICTAMEN:
+${cfdi.verdict.title}
+${cfdi.verdict.summary}
+
 RESUMEN FINANCIERO:
 Subtotal XML: $${cfdi.subtotal}
 Subtotal Calc: $${cfdi.subtotalCalculado}
@@ -55,7 +61,16 @@ Total XML: $${cfdi.total}
 Total Calc: $${cfdi.totalCalculado}
 
 HALLAZGOS:
-${cfdi.hallazgos.length > 0 ? cfdi.hallazgos.join('\n') : 'Sin discrepancias detectadas.'}
+${cfdi.findings.length > 0 ? cfdi.findings.map(f => `- ${f.title}: ${f.summary}`).join('\n') : 'Sin discrepancias detectadas.'}
+
+TRASLADOS AGRUPADOS:
+${cfdi.taxAuditGroups.length > 0 ? cfdi.taxAuditGroups.map(group => `- ${group.impuesto} ${group.tipoFactor} ${(group.tasaOCuota * 100).toFixed(2)}% | Detalle: ${group.importeDetalle.toFixed(2)} | Agrupado: ${group.importeAgrupado.toFixed(2)} | Dif: ${group.diferencia.toFixed(2)}`).join('\n') : 'Sin traslados agrupados detectados.'}
+
+CONCEPTOS AFECTADOS:
+${cfdi.impactedConceptIndexes.length > 0 ? cfdi.impactedConceptIndexes.map(index => {
+  const c = cfdi.conceptos[index];
+  return `- ${index + 1}. ${c.descripcion}: XML $${c.importe} vs Calc $${c.importeCalculado} | Dif $${c.diferencia.toFixed(6)}`;
+}).join('\n') : 'No hay conceptos afectados.'}
 
 CONCEPTOS REVISADOS:
 ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.importeCalculado} (${c.diferencia === 0 ? 'OK' : 'ERROR'})`).join('\n')}
@@ -68,7 +83,16 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     a.click();
   };
 
-  const filteredConceptos = cfdi?.conceptos.filter(c => 
+  const copyDiagnostic = () => {
+    if (!cfdi) return;
+    navigator.clipboard.writeText(cfdi.supportText);
+  };
+
+  const conceptPool = cfdi
+    ? (onlyImpacted ? cfdi.impactedConceptIndexes.map((index) => cfdi.conceptos[index]).filter(Boolean) : cfdi.conceptos)
+    : [];
+
+  const filteredConceptos = conceptPool.filter(c => 
     c.descripcion.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.claveProdServ.includes(searchTerm)
   );
@@ -109,6 +133,13 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
             <span className="text-[10px] font-mono opacity-50 uppercase">UUID</span>
             <span className="text-xs font-mono font-bold tracking-tighter">{cfdi.uuid}</span>
           </div>
+          <button
+            onClick={copyDiagnostic}
+            className="border border-[#141414]/20 px-3 py-2 text-[10px] font-mono uppercase tracking-widest hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors flex items-center gap-2"
+          >
+            <Copy size={12} />
+            Copiar diagnóstico
+          </button>
           <button 
             onClick={exportReport}
             className="bg-[#141414] text-[#E4E3E0] px-4 py-2 text-xs font-mono uppercase tracking-widest hover:opacity-80 transition-opacity flex items-center gap-2"
@@ -122,24 +153,57 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
       <main className="flex-1 flex overflow-hidden">
         {/* Sidebar Hallazgos */}
         <aside className="w-80 border-r border-[#141414] flex flex-col bg-[#E4E3E0]">
+          <div className="p-4 border-b border-[#141414]">
+            <p className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-2">Dictamen</p>
+            <div
+              className={`p-3 border rounded ${
+                cfdi.verdict.status === 'critical'
+                  ? 'border-red-500/30 bg-red-50'
+                  : cfdi.verdict.status === 'review'
+                    ? 'border-amber-500/30 bg-amber-50'
+                    : 'border-green-500/30 bg-green-50'
+              }`}
+            >
+              <p className="text-sm font-semibold">{cfdi.verdict.title}</p>
+              <p className="text-[11px] font-mono leading-relaxed mt-2 opacity-80">{cfdi.verdict.summary}</p>
+            </div>
+          </div>
+
           <div className="p-4 border-b border-[#141414] flex items-center justify-between">
             <h2 className="text-xs font-mono uppercase tracking-widest opacity-50">Hallazgos</h2>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${cfdi.hallazgos.length > 0 ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-              {cfdi.hallazgos.length} Alertas
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${cfdi.findings.length > 0 ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+              {cfdi.findings.length} Alertas
             </span>
           </div>
           
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {cfdi.hallazgos.length === 0 ? (
+            {cfdi.findings.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full opacity-30 text-center">
                 <CheckCircle2 size={48} className="mb-4" />
                 <p className="text-xs font-mono uppercase tracking-widest">Sin discrepancias detectadas</p>
               </div>
             ) : (
-              cfdi.hallazgos.map((h, i) => (
-                <div key={i} className="p-3 border border-red-500/30 bg-red-50 rounded flex gap-3">
-                  <AlertTriangle className="text-red-500 shrink-0" size={16} />
-                  <p className="text-xs font-mono leading-relaxed text-red-900">{h}</p>
+              cfdi.findings.map((finding) => (
+                <div
+                  key={finding.id}
+                  className={`p-3 border rounded flex gap-3 ${
+                    finding.severity === 'critical'
+                      ? 'border-red-500/30 bg-red-50'
+                      : 'border-amber-500/30 bg-amber-50'
+                  }`}
+                >
+                  <AlertTriangle
+                    className={finding.severity === 'critical' ? 'text-red-500 shrink-0' : 'text-amber-500 shrink-0'}
+                    size={16}
+                  />
+                  <div>
+                    <p className={`text-xs font-semibold ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
+                      {finding.title}
+                    </p>
+                    <p className={`text-xs font-mono leading-relaxed mt-1 ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
+                      {finding.summary}
+                    </p>
+                  </div>
                 </div>
               ))
             )}
@@ -195,6 +259,46 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
             </div>
           </div>
 
+          <div className="border-b border-[#141414] bg-[#141414]/[0.03]">
+            <div className="px-4 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Auditoría de Traslados</p>
+                <p className="text-xs font-mono opacity-60 mt-1">Comparación entre el detalle por concepto y el agrupado del comprobante.</p>
+              </div>
+              <span className="text-[10px] font-mono uppercase opacity-50">
+                {cfdi.taxAuditGroups.filter((group) => Math.abs(group.diferencia) > 0.000001).length} diferencias
+              </span>
+            </div>
+            <div className="overflow-auto max-h-44 border-t border-[#141414]/10 bg-white/20">
+              <table className="w-full border-collapse">
+                <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]/10">
+                  <tr className="text-[10px] font-mono uppercase opacity-50 text-left">
+                    <th className="p-3 font-normal">Impuesto</th>
+                    <th className="p-3 font-normal">Tipo</th>
+                    <th className="p-3 font-normal text-right">Tasa</th>
+                    <th className="p-3 font-normal text-right">Detalle</th>
+                    <th className="p-3 font-normal text-right">Agrupado</th>
+                    <th className="p-3 font-normal text-right">Dif.</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#141414]/10">
+                  {cfdi.taxAuditGroups.map((group) => (
+                    <tr key={group.key}>
+                      <td className="p-3 text-[11px] font-mono">{group.impuesto}</td>
+                      <td className="p-3 text-[11px]">{group.tipoFactor}</td>
+                      <td className="p-3 text-[11px] font-mono text-right">{(group.tasaOCuota * 100).toFixed(2)}%</td>
+                      <td className="p-3 text-[11px] font-mono text-right">${group.importeDetalle.toFixed(2)}</td>
+                      <td className="p-3 text-[11px] font-mono text-right">${group.importeAgrupado.toFixed(2)}</td>
+                      <td className={`p-3 text-[11px] font-mono text-right ${Math.abs(group.diferencia) > 0.000001 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
+                        ${group.diferencia.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           {/* Search & Filters */}
           <div className="p-4 border-b border-[#141414] flex items-center justify-between bg-white/50">
             <div className="relative w-96">
@@ -208,7 +312,15 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
               />
             </div>
             <div className="flex items-center gap-4 text-[10px] font-mono uppercase opacity-50">
-              <span>Mostrando {filteredConceptos?.length} conceptos</span>
+              <button
+                onClick={() => setOnlyImpacted((value) => !value)}
+                className={`px-3 py-2 border text-[10px] font-mono uppercase tracking-widest transition-colors ${
+                  onlyImpacted ? 'bg-[#141414] text-[#E4E3E0] border-[#141414]' : 'border-[#141414]/20 hover:border-[#141414]'
+                }`}
+              >
+                {onlyImpacted ? 'Solo discrepancias' : 'Todos los conceptos'}
+              </button>
+              <span>{onlyImpacted ? 'Conceptos afectados' : 'Conceptos revisados'}: {filteredConceptos.length}</span>
             </div>
           </div>
 
@@ -223,11 +335,12 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                   <th className="p-4 font-normal text-right">V. Unitario</th>
                   <th className="p-4 font-normal text-right">Importe XML</th>
                   <th className="p-4 font-normal text-right">Importe Calc.</th>
+                  <th className="p-4 font-normal text-right">Dif.</th>
                   <th className="p-4 font-normal text-center">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#141414]/10">
-                {filteredConceptos?.map((c, i) => (
+                {filteredConceptos.map((c, i) => (
                   <motion.tr 
                     key={i}
                     initial={{ opacity: 0 }}
@@ -244,8 +357,11 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                     <td className="p-4 text-xs font-mono text-right italic opacity-70">
                       ${c.importeCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
                     </td>
+                    <td className={`p-4 text-xs font-mono text-right ${c.diferencia > 0.000001 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
+                      ${c.diferencia.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 6 })}
+                    </td>
                     <td className="p-4 text-center">
-                      {Math.abs(c.importe - (c.cantidad * c.valorUnitario)) > 0.01 ? (
+                      {c.diferencia > 0.000001 ? (
                         <AlertTriangle size={14} className="text-red-500 mx-auto" />
                       ) : (
                         <CheckCircle2 size={14} className="text-green-500 mx-auto opacity-30 group-hover:opacity-100" />
@@ -336,6 +452,10 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                               <div className="flex justify-between italic">
                                 <span>Importe Calc:</span>
                                 <span>${imp.importeCalculado.toFixed(6)}</span>
+                              </div>
+                              <div className={`flex justify-between pt-2 border-t border-[#141414]/10 mt-2 ${imp.diferencia > 0.000001 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
+                                <span>Diferencia:</span>
+                                <span>${imp.diferencia.toFixed(6)}</span>
                               </div>
                             </div>
                           </div>
