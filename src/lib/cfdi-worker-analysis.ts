@@ -1,5 +1,10 @@
 import { XMLParser } from 'fast-xml-parser';
 import { buildCfdiData, detectCfdiProfile } from '../cfdi/application/cfdiAnalysisService';
+import {
+  buildCfdiAnalysisBundle,
+  extractIngresoRowsData,
+  extractPagoRowsData,
+} from '../cfdi/application/cfdiExtractionService';
 import type {
   CFDIAnalysisBundle,
   CFDIData,
@@ -63,229 +68,16 @@ export function extractIngresoRowsWorker(
   xml: string,
   onProgress?: WorkerProgressReporter
 ): CFDIIngresoRow[] {
-  const comprobante = getComprobanteRoot(xml);
-  const timbre = getTimbre(comprobante);
-  const emisor = comprobante.Emisor as XmlNode | undefined;
-  const receptor = comprobante.Receptor as XmlNode | undefined;
-  const conceptosContainer = comprobante.Conceptos as XmlNode | undefined;
-  const conceptos = asArray((conceptosContainer?.Concepto as XmlNode | XmlNode[] | undefined));
-
-  const baseRow = {
-    uuid: getAttr(timbre, 'UUID'),
-    fecha: getAttr(comprobante, 'Fecha'),
-    serie: getAttr(comprobante, 'Serie'),
-    folio: getAttr(comprobante, 'Folio'),
-    rfcEmisor: getAttr(emisor, 'Rfc'),
-    nombreEmisor: getAttr(emisor, 'Nombre'),
-    rfcReceptor: getAttr(receptor, 'Rfc'),
-    nombreReceptor: getAttr(receptor, 'Nombre'),
-    usoCfdi: getAttr(receptor, 'UsoCFDI'),
-    metodoPago: getAttr(comprobante, 'MetodoPago'),
-    formaPago: getAttr(comprobante, 'FormaPago'),
-    moneda: getAttr(comprobante, 'Moneda'),
-    tipoCambio: getAttr(comprobante, 'TipoCambio'),
-    subtotal: getAttr(comprobante, 'SubTotal'),
-    descuento: getAttr(comprobante, 'Descuento'),
-    total: getAttr(comprobante, 'Total'),
-  };
-
-  const rows: CFDIIngresoRow[] = [];
-
-  onProgress?.(0, 'Filas: 0');
-
-  conceptos.forEach((concepto, index) => {
-    const conceptBase = {
-      ...baseRow,
-      claveProdServ: getAttr(concepto, 'ClaveProdServ'),
-      cantidad: getAttr(concepto, 'Cantidad'),
-      descripcion: getAttr(concepto, 'Descripcion'),
-      valorUnitario: getAttr(concepto, 'ValorUnitario'),
-      importe: getAttr(concepto, 'Importe'),
-      objetoImp: getAttr(concepto, 'ObjetoImp'),
-    };
-
-    const impuestos = concepto.Impuestos as XmlNode | undefined;
-    const trasladosNode = impuestos?.Traslados as XmlNode | undefined;
-    const retencionesNode = impuestos?.Retenciones as XmlNode | undefined;
-    const traslados = asArray((trasladosNode?.Traslado as XmlNode | XmlNode[] | undefined));
-    const retenciones = asArray((retencionesNode?.Retencion as XmlNode | XmlNode[] | undefined));
-
-    if (traslados.length === 0 && retenciones.length === 0) {
-      rows.push({
-        ...conceptBase,
-        tipoImp: '',
-        baseImp: '',
-        impuesto: '',
-        tipoFactor: '',
-        tasaCuota: '',
-        importeImp: '',
-      });
-      return;
-    }
-
-    traslados.forEach((tax) => {
-      rows.push({
-        ...conceptBase,
-        tipoImp: 'Traslado',
-        baseImp: getAttr(tax, 'Base'),
-        impuesto: getAttr(tax, 'Impuesto'),
-        tipoFactor: getAttr(tax, 'TipoFactor'),
-        tasaCuota: getAttr(tax, 'TasaOCuota'),
-        importeImp: getAttr(tax, 'Importe'),
-      });
-    });
-
-    retenciones.forEach((tax) => {
-      rows.push({
-        ...conceptBase,
-        tipoImp: 'Retención',
-        baseImp: getAttr(tax, 'Base'),
-        impuesto: getAttr(tax, 'Impuesto'),
-        tipoFactor: getAttr(tax, 'TipoFactor'),
-        tasaCuota: getAttr(tax, 'TasaOCuota'),
-        importeImp: getAttr(tax, 'Importe'),
-      });
-    });
-
-    if ((index + 1) % 25 === 0 || index === conceptos.length - 1) {
-      onProgress?.(Math.round(((index + 1) / (conceptos.length || 1)) * 100), `Filas: ${rows.length.toLocaleString('es-MX')}`);
-    }
-  });
-
-  return rows;
+  return extractIngresoRowsData(xml, onProgress);
 }
 
 export function extractPagoRowsWorker(
   xml: string,
   onProgress?: WorkerProgressReporter
 ): CFDIPagoRow[] {
-  const comprobante = getComprobanteRoot(xml);
-  const timbre = getTimbre(comprobante);
-  const emisor = comprobante.Emisor as XmlNode | undefined;
-  const receptor = comprobante.Receptor as XmlNode | undefined;
-  const complemento = comprobante.Complemento as XmlNode | undefined;
-  const pagosContainer = complemento
-    ? Object.entries(complemento).find(([key]) => key.toLowerCase().includes('pagos'))?.[1] as XmlNode | undefined
-    : undefined;
-
-  if (!pagosContainer) {
-    throw new Error('No se encontró el complemento de pagos o no hay pagos registrados');
-  }
-
-  const pagos = asArray((pagosContainer.Pago as XmlNode | XmlNode[] | undefined));
-  const rows: CFDIPagoRow[] = [];
-  onProgress?.(0, 'Filas: 0');
-
-  pagos.forEach((pago, index) => {
-    const doctos = asArray((pago.DoctoRelacionado as XmlNode | XmlNode[] | undefined));
-    const fechaPago = getAttr(pago, 'FechaPago');
-    const formaPago = getAttr(pago, 'FormaDePagoP') || getAttr(pago, 'FormaPagoP');
-    const monedaP = getAttr(pago, 'MonedaP');
-    const monto = getAttr(pago, 'Monto');
-
-    if (doctos.length === 0) {
-      rows.push({
-        uuidCFDI: getAttr(timbre, 'UUID'),
-        fechaCFDI: getAttr(comprobante, 'Fecha'),
-        rfcEmisor: getAttr(emisor, 'Rfc'),
-        rfcReceptor: getAttr(receptor, 'Rfc'),
-        fechaPago,
-        formaPago,
-        monedaP,
-        monto,
-        uuidDR: '',
-        serieFolio: '',
-        parcialidad: '',
-        impPagado: '',
-        saldoInsoluto: '',
-        baseDR: '',
-        impuestoDR: '',
-        tipoFactorDR: '',
-        tasaCuotaDR: '',
-        importeDR: '',
-      });
-      return;
-    }
-
-    doctos.forEach((docto) => {
-      const baseRow = {
-        uuidCFDI: getAttr(timbre, 'UUID'),
-        fechaCFDI: getAttr(comprobante, 'Fecha'),
-        rfcEmisor: getAttr(emisor, 'Rfc'),
-        rfcReceptor: getAttr(receptor, 'Rfc'),
-        fechaPago,
-        formaPago,
-        monedaP,
-        monto,
-        uuidDR: getAttr(docto, 'IdDocumento'),
-        serieFolio: [getAttr(docto, 'Serie'), getAttr(docto, 'Folio')].filter(Boolean).join('-') || 'N/A',
-        parcialidad: getAttr(docto, 'NumParcialidad'),
-        impPagado: getAttr(docto, 'ImpPagado'),
-        saldoInsoluto: getAttr(docto, 'ImpSaldoInsoluto'),
-      };
-
-      const impuestosDR = docto.ImpuestosDR as XmlNode | undefined;
-      const trasladosDR = asArray(((impuestosDR?.TrasladosDR as XmlNode | undefined)?.TrasladoDR as XmlNode | XmlNode[] | undefined));
-      const retencionesDR = asArray(((impuestosDR?.RetencionesDR as XmlNode | undefined)?.RetencionDR as XmlNode | XmlNode[] | undefined));
-
-      if (trasladosDR.length === 0 && retencionesDR.length === 0) {
-        rows.push({
-          ...baseRow,
-          baseDR: '',
-          impuestoDR: '',
-          tipoFactorDR: '',
-          tasaCuotaDR: '',
-          importeDR: '',
-        });
-        return;
-      }
-
-      trasladosDR.forEach((tax) => {
-        rows.push({
-          ...baseRow,
-          baseDR: getAttr(tax, 'BaseDR'),
-          impuestoDR: getAttr(tax, 'ImpuestoDR'),
-          tipoFactorDR: getAttr(tax, 'TipoFactorDR'),
-          tasaCuotaDR: getAttr(tax, 'TasaOCuotaDR'),
-          importeDR: getAttr(tax, 'ImporteDR'),
-        });
-      });
-
-      retencionesDR.forEach((tax) => {
-        rows.push({
-          ...baseRow,
-          baseDR: getAttr(tax, 'BaseDR'),
-          impuestoDR: getAttr(tax, 'ImpuestoDR'),
-          tipoFactorDR: getAttr(tax, 'TipoFactorDR'),
-          tasaCuotaDR: getAttr(tax, 'TasaOCuotaDR'),
-          importeDR: getAttr(tax, 'ImporteDR'),
-        });
-      });
-    });
-
-    if ((index + 1) % 5 === 0 || index === pagos.length - 1) {
-      onProgress?.(Math.round(((index + 1) / (pagos.length || 1)) * 100), `Filas: ${rows.length.toLocaleString('es-MX')}`);
-    }
-  });
-
-  if (rows.length === 0) {
-    throw new Error('No se encontró el complemento de pagos o no hay pagos registrados');
-  }
-
-  return rows;
+  return extractPagoRowsData(xml, onProgress);
 }
 
 export function analyzeCFDIWorker(xml: string): CFDIAnalysisBundle {
-  return {
-    profile: detectCFDIProfileWorker(xml),
-    cfdi: parseCFDIWorker(xml),
-    ingresoRows: extractIngresoRowsWorker(xml),
-    pagoRows: (() => {
-      try {
-        return extractPagoRowsWorker(xml);
-      } catch {
-        return [];
-      }
-    })(),
-  };
+  return buildCfdiAnalysisBundle(xml);
 }
