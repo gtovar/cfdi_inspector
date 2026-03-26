@@ -185,7 +185,7 @@ export function parseCFDI(xmlString: string): CFDIData {
   }
 
   // Validaciones Finales
-  if (Math.abs(data.subtotalCalculado - data.subtotal) > 0.01) {
+  if (Math.abs(data.subtotalCalculado - data.subtotal) !== 0) {
     const summary = `XML declara ${data.subtotal.toFixed(2)} y la suma de conceptos da ${data.subtotalCalculado.toFixed(2)}.`;
     data.hallazgos.push(`Discrepancia en Subtotal: ${summary}`);
     data.findings.push({
@@ -199,7 +199,7 @@ export function parseCFDI(xmlString: string): CFDIData {
   const sumaTraslados = data.impuestosGlobales.reduce((acc, curr) => acc + curr.importe, 0);
   data.totalCalculado = data.subtotal - data.descuento + sumaTraslados;
 
-  if (Math.abs(data.totalCalculado - data.total) > 0.01) {
+  if (Math.abs(data.totalCalculado - data.total) !== 0) {
     const summary = `XML declara ${data.total.toFixed(2)} y el cálculo manual da ${data.totalCalculado.toFixed(2)}.`;
     data.hallazgos.push(`Discrepancia en Total: ${summary}`);
     data.findings.push({
@@ -212,7 +212,7 @@ export function parseCFDI(xmlString: string): CFDIData {
 
   const conceptWarnings = data.conceptos
     .map((concepto, index) => ({ concepto, index }))
-    .filter(({ concepto }) => concepto.diferencia > 0.000001)
+    .filter(({ concepto }) => concepto.diferencia !== 0)
     .sort((a, b) => b.concepto.diferencia - a.concepto.diferencia)
     .slice(0, 3);
 
@@ -233,7 +233,7 @@ export function parseCFDI(xmlString: string): CFDIData {
     .flatMap((concepto, conceptIndex) =>
       concepto.impuestos.map((impuesto, taxIndex) => ({ concepto, impuesto, conceptIndex, taxIndex }))
     )
-    .filter(({ impuesto }) => impuesto.diferencia > 0.000001)
+    .filter(({ impuesto }) => impuesto.diferencia !== 0)
     .sort((a, b) => b.impuesto.diferencia - a.impuesto.diferencia)
     .slice(0, 3);
 
@@ -301,7 +301,7 @@ export function parseCFDI(xmlString: string): CFDIData {
     .sort((a, b) => Math.abs(b.diferencia) - Math.abs(a.diferencia));
 
   data.taxAuditGroups
-    .filter((group) => Math.abs(group.diferencia) > 0.000001)
+    .filter((group) => Math.abs(group.diferencia) !== 0)
     .slice(0, 3)
     .forEach((group) => {
       data.findings.push({

@@ -24,6 +24,14 @@ import {
 import { parseCFDI, CFDIData, CFDIConcept } from './lib/cfdi';
 import FileUpload from './components/FileUpload';
 
+function formatExact(value: number) {
+  return value.toLocaleString('es-MX', {
+    useGrouping: false,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 20,
+  });
+}
+
 export default function App() {
   const [cfdi, setCfdi] = useState<CFDIData | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -31,6 +39,7 @@ export default function App() {
   const [selectedConcept, setSelectedConcept] = useState<CFDIConcept | null>(null);
   const [copiedDiagnostic, setCopiedDiagnostic] = useState(false);
   const [reportExported, setReportExported] = useState(false);
+  const [taxesExported, setTaxesExported] = useState(false);
 
   const handleFileSelect = (xml: string) => {
     try {
@@ -95,6 +104,55 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     window.setTimeout(() => setCopiedDiagnostic(false), 1600);
   };
 
+  const exportTaxBreakdown = () => {
+    if (!cfdi) return;
+
+    const headers = [
+      'concepto_index',
+      'descripcion',
+      'clave_prod_serv',
+      'impuesto',
+      'tipo_factor',
+      'tasa_porcentaje',
+      'base',
+      'importe_xml',
+      'importe_calculado',
+      'diferencia',
+    ];
+
+    const escapeCsv = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+
+    const rows = cfdi.conceptos.flatMap((concepto, conceptIndex) =>
+      concepto.impuestos.map((impuesto) => [
+        conceptIndex + 1,
+        concepto.descripcion,
+        concepto.claveProdServ,
+        impuesto.impuesto,
+        impuesto.tipoFactor,
+        (impuesto.tasaOCuota * 100).toFixed(6),
+        impuesto.base.toFixed(6),
+        impuesto.importe.toFixed(6),
+        impuesto.importeCalculado.toFixed(6),
+        impuesto.diferencia.toFixed(6),
+      ])
+    );
+
+    const csv = [
+      headers.join(','),
+      ...rows.map((row) => row.map(escapeCsv).join(',')),
+    ].join('\n');
+
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Desglose_Impuestos_${cfdi.uuid.substring(0, 8)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setTaxesExported(true);
+    window.setTimeout(() => setTaxesExported(false), 1600);
+  };
+
   const conceptPool = cfdi
     ? (onlyImpacted ? cfdi.impactedConceptIndexes.map((index) => cfdi.conceptos[index]).filter(Boolean) : cfdi.conceptos)
     : [];
@@ -103,8 +161,8 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
     c.descripcion.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.claveProdServ.includes(searchTerm)
   );
-  const subtotalDifference = Math.abs(cfdi?.subtotalCalculado ?? 0 - (cfdi?.subtotal ?? 0));
-  const totalDifference = Math.abs(cfdi?.totalCalculado ?? 0 - (cfdi?.total ?? 0));
+  const subtotalDifference = Math.abs((cfdi?.subtotalCalculado ?? 0) - (cfdi?.subtotal ?? 0));
+  const totalDifference = Math.abs((cfdi?.totalCalculado ?? 0) - (cfdi?.total ?? 0));
 
   if (!cfdi) {
     return (
@@ -237,9 +295,9 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                 <span>Subtotal Calc.</span>
                 <span>${cfdi.subtotalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
               </div>
-              <div className={`flex justify-between text-[10px] font-mono ${subtotalDifference > 0.000001 ? 'text-red-600' : 'text-green-600'}`}>
+              <div className={`flex justify-between text-[10px] font-mono ${subtotalDifference !== 0 ? 'text-red-600' : 'text-green-600'}`}>
                 <span>Dif. Subtotal</span>
-                <span>${subtotalDifference.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 6 })}</span>
+                <span>${formatExact(subtotalDifference)}</span>
               </div>
               <div className="flex justify-between text-xs font-mono border-t border-[#141414]/10 pt-2">
                 <span>Descuento</span>
@@ -253,9 +311,9 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                 <span>Total Calc.</span>
                 <span>${cfdi.totalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
               </div>
-              <div className={`flex justify-between text-[10px] font-mono ${totalDifference > 0.000001 ? 'text-red-600' : 'text-green-600'}`}>
+              <div className={`flex justify-between text-[10px] font-mono ${totalDifference !== 0 ? 'text-red-600' : 'text-green-600'}`}>
                 <span>Dif. Total</span>
-                <span>${totalDifference.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 6 })}</span>
+                <span>${formatExact(totalDifference)}</span>
               </div>
             </div>
           </div>
@@ -289,14 +347,27 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
           </div>
 
           <div className="border-b border-[#141414] bg-[#141414]/[0.03]">
-            <div className="px-4 py-2.5 flex items-center justify-between">
+            <div className="px-4 py-2.5 flex items-center justify-between gap-4">
               <div>
                 <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Auditoría de Traslados</p>
                 <p className="text-[11px] font-mono opacity-55 mt-0.5">Comparación entre el detalle por concepto y el agrupado del comprobante.</p>
               </div>
-              <span className="text-[10px] font-mono uppercase opacity-50">
-                {cfdi.taxAuditGroups.filter((group) => Math.abs(group.diferencia) > 0.000001).length} diferencias
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] font-mono uppercase opacity-50">
+                  {cfdi.taxAuditGroups.filter((group) => Math.abs(group.diferencia) !== 0).length} diferencias
+                </span>
+                <button
+                  onClick={exportTaxBreakdown}
+                  className={`px-3 py-1.5 text-[10px] font-mono uppercase tracking-widest transition-colors flex items-center gap-2 border ${
+                    taxesExported
+                      ? 'bg-green-700 text-[#E4E3E0] border-green-700'
+                      : 'border-[#141414]/20 hover:border-[#141414] hover:bg-[#141414] hover:text-[#E4E3E0]'
+                  }`}
+                >
+                  <FileText size={12} />
+                  {taxesExported ? 'CSV descargado' : 'Exportar desglose'}
+                </button>
+              </div>
             </div>
             <div className="overflow-auto max-h-36 border-t border-[#141414]/10 bg-white/15">
               <table className="w-full border-collapse">
@@ -318,8 +389,8 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                       <td className="px-3 py-2 text-[10px] font-mono text-right">{(group.tasaOCuota * 100).toFixed(2)}%</td>
                       <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeDetalle.toFixed(2)}</td>
                       <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeAgrupado.toFixed(2)}</td>
-                      <td className={`px-3 py-2 text-[10px] font-mono text-right ${Math.abs(group.diferencia) > 0.000001 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
-                        ${group.diferencia.toFixed(2)}
+                      <td className={`px-3 py-2 text-[10px] font-mono text-right ${Math.abs(group.diferencia) !== 0 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
+                        ${formatExact(group.diferencia)}
                       </td>
                     </tr>
                   ))}
@@ -386,11 +457,11 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                     <td className="p-4 text-xs font-mono text-right italic opacity-70">
                       ${c.importeCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
                     </td>
-                    <td className={`p-4 text-xs font-mono text-right ${c.diferencia > 0.000001 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
-                      ${c.diferencia.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 6 })}
+                    <td className={`p-4 text-xs font-mono text-right ${c.diferencia !== 0 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
+                      ${formatExact(c.diferencia)}
                     </td>
                     <td className="p-4 text-center">
-                      {c.diferencia > 0.000001 ? (
+                      {c.diferencia !== 0 ? (
                         <AlertTriangle size={14} className="text-red-500 mx-auto" />
                       ) : (
                         <CheckCircle2 size={14} className="text-green-500 mx-auto opacity-30 group-hover:opacity-100" />
@@ -449,9 +520,9 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                           <span>Calculado (Cant * Val):</span>
                           <span>${selectedConcept.importeCalculado.toFixed(6)}</span>
                         </div>
-                        <div className={`flex justify-between text-xs font-mono pt-2 border-t border-[#141414]/10 mt-2 font-bold ${selectedConcept.diferencia > 0.01 ? 'text-red-600' : 'text-green-600'}`}>
+                        <div className={`flex justify-between text-xs font-mono pt-2 border-t border-[#141414]/10 mt-2 font-bold ${selectedConcept.diferencia !== 0 ? 'text-red-600' : 'text-green-600'}`}>
                           <span>Diferencia:</span>
-                          <span>${selectedConcept.diferencia.toFixed(6)}</span>
+                          <span>${formatExact(selectedConcept.diferencia)}</span>
                         </div>
                       </div>
                     </div>
@@ -482,9 +553,9 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
                                 <span>Importe Calc:</span>
                                 <span>${imp.importeCalculado.toFixed(6)}</span>
                               </div>
-                              <div className={`flex justify-between pt-2 border-t border-[#141414]/10 mt-2 ${imp.diferencia > 0.000001 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
+                              <div className={`flex justify-between pt-2 border-t border-[#141414]/10 mt-2 ${imp.diferencia !== 0 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
                                 <span>Diferencia:</span>
-                                <span>${imp.diferencia.toFixed(6)}</span>
+                                <span>${formatExact(imp.diferencia)}</span>
                               </div>
                             </div>
                           </div>
