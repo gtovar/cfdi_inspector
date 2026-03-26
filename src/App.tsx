@@ -7,21 +7,22 @@ import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   FileText, 
-  AlertTriangle, 
   CheckCircle2, 
   Search, 
   ArrowLeft,
-  ChevronRight,
   Database,
   User,
   Calendar,
   Sparkles
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { CFDIData, CFDIConcept, CFDIProfile, CFDIIngresoRow, CFDIPagoRow } from './cfdi/application/cfdiTypes';
+import type { CFDIData, CFDIConcept, CFDIProfile, CFDIIngresoRow, CFDIPagoRow } from './cfdi/public';
 import { analyzeCFDIWithWorker } from './lib/cfdi-worker-client';
 import { explainCfdiField } from './cfdi/domain/explainCfdiField';
+import CfdiSummaryHeader, { type SummaryFieldCard } from './components/CfdiSummaryHeader';
+import FindingsSidebar from './components/FindingsSidebar';
 import FileUpload from './components/FileUpload';
+import TaxAuditPanel from './components/TaxAuditPanel';
 
 function formatExact(value: number) {
   return value.toLocaleString('es-MX', {
@@ -33,14 +34,6 @@ function formatExact(value: number) {
 
 type ExtractMode = 'ingresos' | 'pagos';
 type ExtractSortDirection = 'asc' | 'desc';
-
-interface SummaryFieldCard {
-  key: string;
-  label: string;
-  value: string;
-  icon: LucideIcon;
-  meaning?: string;
-}
 
 interface SummaryMetricCard {
   key: string;
@@ -1016,205 +1009,26 @@ ${cfdi.conceptos.map(c => `- ${c.descripcion}: XML $${c.importe} vs Calc $${c.im
       </header>
 
       <main className="flex-1 min-h-0 flex overflow-hidden">
-        <aside className="w-80 min-h-0 border-r border-[#141414] flex flex-col bg-[#E4E3E0]">
-          <div className="p-4 border-b border-[#141414]">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 min-w-0">
-                <div className={`w-2 h-2 rounded-full shrink-0 ${cfdi.findings.length > 0 ? 'bg-red-600' : 'bg-green-600'}`} />
-                <p className="text-[10px] font-mono uppercase tracking-[0.2em] opacity-60">Hallazgos encontrados</p>
-              </div>
-              <span
-                className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-mono ${
-                  cfdi.findings.length > 0
-                    ? 'bg-red-100 text-red-600'
-                    : 'bg-green-100 text-green-700'
-                }`}
-              >
-                {cfdi.findings.length === 0 ? '0 alertas' : `${cfdi.findings.length} alertas`}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {cfdi.findings.length === 0 ? (
-              <p className="text-[11px] font-mono opacity-55 leading-relaxed">
-                No se detectaron discrepancias con las reglas actualmente implementadas para este XML.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {cfdi.findings.slice(0, 4).map((finding) => (
-                  <div
-                    key={finding.id}
-                    className={`p-3 border rounded flex gap-3 ${
-                      finding.severity === 'critical'
-                        ? 'border-red-500/30 bg-red-50'
-                        : 'border-amber-500/30 bg-amber-50'
-                    }`}
-                  >
-                    <AlertTriangle
-                      className={finding.severity === 'critical' ? 'text-red-500 shrink-0' : 'text-amber-500 shrink-0'}
-                      size={16}
-                    />
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono ${
-                          finding.severity === 'critical'
-                            ? 'bg-red-100 text-red-700'
-                            : 'bg-amber-100 text-amber-700'
-                        }`}>
-                          {getFindingOriginLabel(finding.id)}
-                        </span>
-                        <p className={`text-xs font-semibold ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
-                          {finding.title}
-                        </p>
-                      </div>
-                      <p className={`text-xs font-mono leading-relaxed mt-1 ${finding.severity === 'critical' ? 'text-red-900' : 'text-amber-900'}`}>
-                        {finding.summary}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="p-4 border-t border-[#141414] bg-[#141414]/5">
-            <h3 className="text-[10px] font-mono uppercase tracking-widest opacity-50 mb-3">Resumen</h3>
-            <div className="space-y-2 text-[11px] font-mono">
-              {activeDatasetType === 'ingresos' ? (
-                <>
-                  <div className="flex justify-between gap-3">
-                    <span>Subtotal XML</span>
-                    <span>${cfdi.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-                  </div>
-                  <div className="flex justify-between gap-3 text-blue-600 italic">
-                    <span>Subtotal Calc.</span>
-                    <span>${cfdi.subtotalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-                  </div>
-                  <div className={`flex justify-between gap-3 ${subtotalDifference !== 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    <span>Dif. Subtotal</span>
-                    <span>${formatExact(subtotalDifference)}</span>
-                  </div>
-                  <div className="flex justify-between gap-3 border-t border-[#141414]/10 pt-2">
-                    <span>Total XML</span>
-                    <span>${cfdi.total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-                  </div>
-                  <div className="flex justify-between gap-3 text-blue-600 italic">
-                    <span>Total Calc.</span>
-                    <span>${cfdi.totalCalculado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span>
-                  </div>
-                  <div className={`flex justify-between gap-3 ${totalDifference !== 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    <span>Dif. Total</span>
-                    <span>${formatExact(totalDifference)}</span>
-                  </div>
-                </>
-              ) : (
-                activeExtractMetrics.map((metric) => (
-                  <div key={metric.key} className="flex justify-between gap-3">
-                    <span>{metric.label}</span>
-                    <span>{metric.value}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </aside>
+        <FindingsSidebar
+          cfdi={cfdi}
+          activeDatasetType={activeDatasetType}
+          activeExtractMetrics={activeExtractMetrics}
+          subtotalDifference={subtotalDifference}
+          totalDifference={totalDifference}
+          formatExact={formatExact}
+          getFindingOriginLabel={getFindingOriginLabel}
+        />
 
         <section className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-          <div className={`grid border-b border-[#141414] ${summaryFields.length >= 4 ? 'grid-cols-4' : 'grid-cols-3'}`}>
-            {summaryFields.map((field, index) => {
-              const Icon = field.icon;
-              return (
-                <div
-                  key={field.key}
-                  className={`p-4 flex items-start gap-3 ${index < summaryFields.length - 1 ? 'border-r border-[#141414]' : ''}`}
-                  title={field.meaning}
-                >
-                  <Icon size={16} className="opacity-50 mt-1" />
-                  <div>
-                    <p className="text-[10px] font-mono uppercase opacity-50">{field.label}</p>
-                    <p className="text-xs font-bold truncate max-w-[200px]">{field.value}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="border-b border-[#141414] bg-[#141414]/[0.03]">
-            <button
-              type="button"
-              onClick={() => setTaxAuditExpanded((current) => !current)}
-              className="w-full px-4 py-2.5 flex items-center justify-between gap-4 text-left hover:bg-[#141414]/[0.04] transition-colors"
-            >
-              <div>
-                <p className="text-[10px] font-mono uppercase tracking-widest opacity-50">Auditoría de Traslados</p>
-                <p className="text-[11px] font-mono opacity-55 mt-0.5">Comparación entre el detalle por concepto y el agrupado del comprobante.</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-[10px] font-mono uppercase opacity-50">
-                  {cfdi.taxAuditGroups.filter((group) => Math.abs(group.diferencia) !== 0).length} diferencias
-                </span>
-                <ChevronRight
-                  size={14}
-                  className={`opacity-50 transition-transform ${taxAuditExpanded ? 'rotate-90' : 'rotate-0'}`}
-                />
-              </div>
-            </button>
-            {taxAuditExpanded && (
-            <div className="overflow-auto max-h-36 border-t border-[#141414]/10 bg-white/15">
-              <table className="w-full border-collapse">
-                <thead className="sticky top-0 bg-[#E4E3E0] z-10 border-b border-[#141414]/10">
-                  <tr className="text-[10px] font-mono uppercase opacity-50 text-left">
-                    <th className="px-3 py-2 font-normal">Impuesto</th>
-                    <th className="px-3 py-2 font-normal">Tipo</th>
-                    <th className="px-3 py-2 font-normal text-right">Tasa</th>
-                    <th className="px-3 py-2 font-normal text-right">Detalle</th>
-                    <th className="px-3 py-2 font-normal text-right">Agrupado</th>
-                    <th className="px-3 py-2 font-normal text-right">Dif.</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#141414]/10">
-                  {cfdi.taxAuditGroups.map((group) => (
-                    <tr key={group.key}>
-                      <td
-                        className="px-3 py-2 text-[10px] font-mono"
-                        title={getExplainedMeaning('impuesto', group.impuesto)}
-                      >
-                        <div>{getExplainedTaxLabel(group.impuesto)}</div>
-                        <div className="text-[9px] opacity-50 mt-0.5">
-                          {getExplainedMeaning('impuesto', group.impuesto)}
-                        </div>
-                      </td>
-                      <td
-                        className="px-3 py-2 text-[10px]"
-                        title={getExplainedMeaning('tipoFactor', group.tipoFactor)}
-                      >
-                        <div>{group.tipoFactor}</div>
-                        <div className="text-[9px] opacity-50 mt-0.5">
-                          {getExplainedMeaning('tipoFactor', group.tipoFactor)}
-                        </div>
-                      </td>
-                      <td
-                        className="px-3 py-2 text-[10px] font-mono text-right"
-                        title={getExplainedMeaning('tasaOCuota', group.tasaOCuota)}
-                      >
-                        <div>{(group.tasaOCuota * 100).toFixed(2)}%</div>
-                        <div className="text-[9px] opacity-50 mt-0.5">
-                          {getExplainedMeaning('tasaOCuota', group.tasaOCuota)}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeDetalle.toFixed(2)}</td>
-                      <td className="px-3 py-2 text-[10px] font-mono text-right">${group.importeAgrupado.toFixed(2)}</td>
-                      <td className={`px-3 py-2 text-[10px] font-mono text-right ${Math.abs(group.diferencia) !== 0 ? 'text-red-600 font-bold' : 'text-green-600'}`}>
-                        ${formatExact(group.diferencia)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            )}
-          </div>
+          <CfdiSummaryHeader summaryFields={summaryFields} />
+          <TaxAuditPanel
+            cfdi={cfdi}
+            taxAuditExpanded={taxAuditExpanded}
+            onToggle={() => setTaxAuditExpanded((current) => !current)}
+            getExplainedMeaning={getExplainedMeaning}
+            getExplainedTaxLabel={getExplainedTaxLabel}
+            formatExact={formatExact}
+          />
           <div className="flex-1 min-h-0 flex flex-col">
             {renderExtractWorkspace(true)}
           </div>
